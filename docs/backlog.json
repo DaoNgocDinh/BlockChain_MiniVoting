@@ -1,0 +1,521 @@
+[
+  {
+    "key": "TV1-W1",
+    "week": 1,
+    "member": 1,
+    "title": "[TV1][W1] Data model, genesis và canonical bytes",
+    "files": "src/core, config, docs/data-model.md",
+    "reviewer": "TV2, TV3",
+    "dependencies": [],
+    "scope": [
+      "Đặc tả Transaction/Block/Genesis, amount nguyên, nonce, địa chỉ, canonical bytes và context ký.",
+      "Sinh public genesis mẫu/test vector; registry bốn validator, leader cố định và quorum 3."
+    ],
+    "acceptance": [
+      "T01: đổi thứ tự key không đổi canonical bytes/hash.",
+      "Bốn node có cùng genesis hash; không commit private key.",
+      "TV2/TV3 review hợp đồng trước tích hợp."
+    ]
+  },
+  {
+    "key": "TV2-W1",
+    "week": 1,
+    "member": 2,
+    "title": "[TV2][W1] Đặc tả protocol, fault model và bất biến",
+    "files": "docs/protocol.md, docs/consensus-state-machine.md",
+    "reviewer": "TV1, TV3",
+    "dependencies": [],
+    "scope": [
+      "Đặc tả PROPOSE/PREPARE/COMMIT, mọi validator kể cả leader bỏ phiếu.",
+      "Chốt n=4, q=3, tối đa một Byzantine; lock/persist-before-send và timeout/retry.",
+      "Giải thích giao quorum, fixed leader và giới hạn safety/liveness."
+    ],
+    "acceptance": [
+      "Nhóm giải thích được quorum 3/4 và quy tắc không ký hai giá trị cùng context.",
+      "Tài liệu ghi rõ leader lỗi/split vote có thể stall; không gọi PBFT đầy đủ.",
+      "TV1/TV3 thống nhất schema và persistence interface."
+    ]
+  },
+  {
+    "key": "TV3-W1",
+    "week": 1,
+    "member": 3,
+    "title": "[TV3][W1] Môi trường, API/config và skeleton bốn node",
+    "files": "src/api, config, scripts, docs/api-contract.md",
+    "reviewer": "TV1, TV2; TV4 review API",
+    "dependencies": [
+      "TV1-W1",
+      "TV2-W1"
+    ],
+    "scope": [
+      "Chốt Python/dependency và lockfile backend, API/schema/timeout/payload limits.",
+      "Hoàn thiện config, health, registry và đường dẫn bốn DB/keys riêng; phối hợp sinh genesis.",
+      "Bổ sung chạy/dừng đúng tiến trình của đồ án."
+    ],
+    "acceptance": [
+      "Bốn /health trả đúng node ID; health không có nghĩa đủ quorum/đã sync.",
+      "Cài từ dependency lock trên máy khác; schema được chủ module review.",
+      "Bốn node không dùng chung DB/private key; script không kill process ngoài repo."
+    ]
+  },
+  {
+    "key": "TV4-W1",
+    "week": 1,
+    "member": 4,
+    "title": "[TV4][W1] Wireframe, test matrix và khung báo cáo",
+    "files": "frontend, docs/test-matrix.md, docs/report/outline.md",
+    "reviewer": "TV3 (API), TV2 (consensus)",
+    "dependencies": [
+      "TV1-W1",
+      "TV2-W1"
+    ],
+    "scope": [
+      "Chốt wireframe node/transaction/account/block/certificate/timeline và trạng thái với TV3.",
+      "Ma trận T01–T30, chủ trì/review/bằng chứng và khung chương báo cáo.",
+      "Chốt Node, commit package-lock.json và chuyển CI sang npm ci."
+    ],
+    "acceptance": [
+      "Wireframe được TV2/TV3 review; UI không giữ key validator hay chốt block.",
+      "Đủ T01–T30, chưa chạy ghi Not run; mỗi người có chương báo cáo riêng.",
+      "Frontend cài/build từ lockfile; mock tách khỏi dữ liệu thật."
+    ]
+  },
+  {
+    "key": "TV1-W2",
+    "week": 2,
+    "member": 1,
+    "title": "[TV1][W2] Chữ ký giao dịch, số dư/nonce và validate block",
+    "files": "src/core, tests/unit, ví CLI demo",
+    "reviewer": "TV2, TV3",
+    "dependencies": [
+      "TV1-W1"
+    ],
+    "scope": [
+      "Wrapper SHA-256/Ed25519, ví CLI tạo/ký giao dịch.",
+      "Kiểm amount/chain/signature/nonce/balance, execute_block tuần tự thuần.",
+      "Tính tx_list_hash/state_hash và validate prev_hash/height."
+    ],
+    "acceptance": [
+      "T02–T04, T06–T09 đạt; sai chữ ký/nonce/chain/state hash bị chặn.",
+      "Amount 0/âm/float/bool/quá giới hạn và chi vượt số dư bị loại.",
+      "Không cập nhật state bền vững trước COMMIT."
+    ]
+  },
+  {
+    "key": "TV2-W2",
+    "week": 2,
+    "member": 2,
+    "title": "[TV2][W2] State machine và simulation transport",
+    "files": "src/consensus, tests/simulation",
+    "reviewer": "TV1, TV3",
+    "dependencies": [
+      "TV2-W1",
+      "TV1-W1"
+    ],
+    "scope": [
+      "State machine tách HTTP/DB; transport giả điều khiển trễ/lặp/đảo thứ tự.",
+      "Verify sender/signature/phase/height/chain/hash; unique sender, bounded buffer."
+    ],
+    "acceptance": [
+      "T10/T12: hai phiếu không chốt; 100 request một sender chỉ tính một danh tính.",
+      "T13/T14: sender giả, chữ ký sai, trộn phase/context không tăng quorum.",
+      "T15: đảo thứ tự không tạo COMMIT sai điều kiện."
+    ]
+  },
+  {
+    "key": "TV3-W2",
+    "week": 2,
+    "member": 3,
+    "title": "[TV3][W2] HTTPX transport, peer API và SQLite repos",
+    "files": "src/network, src/storage, src/api, tests/integration",
+    "reviewer": "TV1, TV2",
+    "dependencies": [
+      "TV3-W1"
+    ],
+    "scope": [
+      "Transport async dùng chung, timeout/retry/idempotency và buffer giới hạn.",
+      "Schema blocks/accounts/own_votes/locks/certificates/pending proposals.",
+      "Interface atomic commit và persist own vote; không giữ DB transaction khi chờ HTTP."
+    ],
+    "acceptance": [
+      "Peer timeout không làm node crash; lỗi có node/context.",
+      "Constraints chống duplicate apply và own votes/locks xung đột.",
+      "Integration HTTP/DB thật; guard payload/future height (T30)."
+    ]
+  },
+  {
+    "key": "TV4-W2",
+    "week": 2,
+    "member": 4,
+    "title": "[TV4][W2] Dashboard mock theo schema và ví demo",
+    "files": "frontend, docs/ui.md",
+    "reviewer": "TV3, TV2",
+    "dependencies": [
+      "TV4-W1",
+      "TV3-W1"
+    ],
+    "scope": [
+      "Trang node/status, transaction/account/block/certificate theo hợp đồng.",
+      "Mock có nhãn, tách API adapter thật; kết nối ví/API của TV1.",
+      "Loading/error/offline và accepted/committed/rejected/local-unknown/stalled."
+    ],
+    "acceptance": [
+      "Responsive, lint/build đạt; TV3 xác nhận schema.",
+      "202 accepted không hiển thị đã chốt; số dư lấy committed state.",
+      "Không trình bày mock/số liệu giả như trạng thái mạng thật."
+    ]
+  },
+  {
+    "key": "TV1-W3",
+    "week": 3,
+    "member": 1,
+    "title": "[TV1][W3] Mempool và tích hợp committed state",
+    "files": "src/core, tests/integration",
+    "reviewer": "TV2, TV3",
+    "dependencies": [
+      "TV1-W2",
+      "TV2-W2",
+      "TV3-W2"
+    ],
+    "scope": [
+      "Mempool chống trùng, chọn thứ tự xác định; kết nối proposer.",
+      "Tích hợp execute/validate với consensus và atomic commit storage."
+    ],
+    "acceptance": [
+      "T05/T11: giao dịch áp dụng tối đa một lần sau commit.",
+      "Replay cùng chuỗi cho cùng state hash/balances/nonces.",
+      "Không thay số dư từ accepted/mempool; retry không double apply."
+    ]
+  },
+  {
+    "key": "TV2-W3",
+    "week": 3,
+    "member": 2,
+    "title": "[TV2][W3] Ba pha thật, certificate và durable voting",
+    "files": "src/consensus, tests/integration",
+    "reviewer": "TV1, TV3",
+    "dependencies": [
+      "TV2-W2",
+      "TV1-W2",
+      "TV3-W2"
+    ],
+    "scope": [
+      "Kết nối core validation, transport và own vote persistence.",
+      "Tạo/verify certificate ba COMMIT khác danh tính, cùng context.",
+      "Ghi lock/vote trước send; events phục vụ timeline."
+    ],
+    "acceptance": [
+      "T11: ba COMMIT đúng tạo certificate và chốt tối đa một lần.",
+      "Node tự verify certificate, không tin count từ leader.",
+      "Một giao dịch thật trên bốn process cho cùng block/state hash."
+    ]
+  },
+  {
+    "key": "TV3-W3",
+    "week": 3,
+    "member": 3,
+    "title": "[TV3][W3] Bốn node, atomic commit và end-to-end thật",
+    "files": "src/network, src/storage, src/api, scripts",
+    "reviewer": "TV1, TV2",
+    "dependencies": [
+      "TV3-W2",
+      "TV1-W2",
+      "TV2-W2"
+    ],
+    "scope": [
+      "Route propose/prepare/commit/finalized; nối core/consensus/storage.",
+      "Atomic write block/certificate/state/applied IDs/height.",
+      "API quan sát thật và script chạy/dừng nhóm node."
+    ],
+    "acceptance": [
+      "Quy trình chung chạy bốn node với DB/keys tách biệt.",
+      "Giao dịch thật đạt 3/4 COMMIT và bốn ledger/state giống nhau.",
+      "Retry không double apply; accepted/committed phản ánh đúng thời điểm."
+    ]
+  },
+  {
+    "key": "TV4-W3",
+    "week": 3,
+    "member": 4,
+    "title": "[TV4][W3] Explorer, certificate và vote timeline thật",
+    "files": "frontend, tests/integration, docs/demo",
+    "reviewer": "TV3 (API), TV2 (vote)",
+    "dependencies": [
+      "TV4-W2",
+      "TV1-W3",
+      "TV2-W3",
+      "TV3-W3"
+    ],
+    "scope": [
+      "Kết nối bốn node: height/tip/phase/sync và trạng thái API.",
+      "Explorer transaction/account/block/certificate; timeline sender/phase/height/hash/time.",
+      "Smoke test từ giao dịch đến commit."
+    ],
+    "acceptance": [
+      "Mất API không giữ online giả; số liệu có nguồn node rõ.",
+      "Xem được ba danh tính/chữ ký tạo certificate, đối chiếu log thật.",
+      "T27/T28: bốn ledger nhất quán; UI không nhầm accepted với committed."
+    ]
+  },
+  {
+    "key": "TV1-W4",
+    "week": 4,
+    "member": 1,
+    "title": "[TV1][W4] Double spend, replay, tamper và state recovery",
+    "files": "src/core, tests/unit, tests/fault",
+    "reviewer": "TV3; TV2 về validity",
+    "dependencies": [
+      "TV1-W3",
+      "TV3-W3"
+    ],
+    "scope": [
+      "Bổ sung double spend/replay/tamper và thứ tự thực thi.",
+      "Crash trước/trong/sau transaction; replay và phát hiện local corruption."
+    ],
+    "acceptance": [
+      "T02–T09, T23, T26 có bằng chứng chạy lại.",
+      "Không tạo trạng thái trừ tiền nhưng thiếu block, không double apply.",
+      "Replay cho cùng state hash; dữ liệu bị sửa không tiếp tục vote mù."
+    ]
+  },
+  {
+    "key": "TV2-W4",
+    "week": 4,
+    "member": 2,
+    "title": "[TV2][W4] Equivocation, split vote, restart lock và race",
+    "files": "src/consensus, tests/simulation, tests/fault",
+    "reviewer": "TV1, TV3",
+    "dependencies": [
+      "TV2-W3",
+      "TV3-W3"
+    ],
+    "scope": [
+      "Hai proposal cạnh tranh, follower double-sign và phiếu đảo thứ tự.",
+      "Restart giữ own vote/lock; retry đúng bytes cũ, không tự mở khóa.",
+      "Race hai request cố tạo own vote khác hash."
+    ],
+    "acceptance": [
+      "T10–T17, T19, T22, T29 đạt với seed/log/config.",
+      "Không hai block chốt xung đột ở honest nodes trong mô hình.",
+      "Restart/race không làm ký hai giá trị; fixed leader lỗi báo stall."
+    ]
+  },
+  {
+    "key": "TV3-W4",
+    "week": 4,
+    "member": 3,
+    "title": "[TV3][W4] Sync/recovery và fault injection transport",
+    "files": "src/network, src/storage, scripts, tests/fault",
+    "reviewer": "TV1, TV2",
+    "dependencies": [
+      "TV3-W3",
+      "TV2-W3"
+    ],
+    "scope": [
+      "Sync từng block/certificate, replay từ trạng thái tin cậy.",
+      "Restart giữ vote/lock; fault drop/delay/duplicate/partition mặc định tắt.",
+      "Crash test và guard buffer/payload/future-height."
+    ],
+    "acceptance": [
+      "T18–T26/T30 tái hiện được; T22/T23 phối hợp chủ module.",
+      "Partition 2–2 không chốt; nhóm 3 có leader có thể tiến triển; node lẻ sync sau nối lại.",
+      "Certificate giả không được chấp nhận vì chuỗi dài; state hash follower khớp sau sync."
+    ]
+  },
+  {
+    "key": "TV4-W4",
+    "week": 4,
+    "member": 4,
+    "title": "[TV4][W4] Regression và workload runner tái lập",
+    "files": "scripts, tests/integration, tests/fault, frontend",
+    "reviewer": "TV3, TV2",
+    "dependencies": [
+      "TV4-W3",
+      "TV1-W4",
+      "TV2-W4",
+      "TV3-W4"
+    ],
+    "scope": [
+      "Workload có seed/config/tải/mốc thời gian, ký tx hợp lệ phối hợp TV1.",
+      "Điều phối T01–T30 với pass/fail/not-run, log và commit SHA.",
+      "UI pending/stalled/sync/offline phản ánh fault thật."
+    ],
+    "acceptance": [
+      "Cùng seed/config tái tạo được workload đầu vào và metadata.",
+      "T27: hash mọi height chung, balances/nonces của bốn node khớp.",
+      "T28: accepted không là committed; không dùng UI tự chốt/bỏ qua lỗi."
+    ]
+  },
+  {
+    "key": "TV1-W5",
+    "week": 5,
+    "member": 1,
+    "title": "[TV1][W5] Rà core, hỗ trợ benchmark và chương blockchain",
+    "files": "src/core, test vectors, docs/report/core.md",
+    "reviewer": "TV2, TV4",
+    "dependencies": [
+      "TV1-W4"
+    ],
+    "scope": [
+      "Rà lỗi core; hỗ trợ workload hợp lệ và kiểm số dư/nonce.",
+      "Bàn giao test vectors/ví dụ và viết chương blockchain/giao dịch."
+    ],
+    "acceptance": [
+      "Benchmark phân biệt invalid input với lỗi hệ thống.",
+      "Regression core đạt ở commit báo cáo.",
+      "Tài liệu hash/signature/state khớp source và ví dụ tái hiện."
+    ]
+  },
+  {
+    "key": "TV2-W5",
+    "week": 5,
+    "member": 2,
+    "title": "[TV2][W5] Phân tích consensus, message count và giới hạn",
+    "files": "experiments, docs/report/consensus.md",
+    "reviewer": "TV1, TV4",
+    "dependencies": [
+      "TV2-W4"
+    ],
+    "scope": [
+      "Rà safety/liveness theo source; chương consensus/state diagram.",
+      "Phối hợp TV4 đếm messages theo phase, phân tích quorum/latency/fault."
+    ],
+    "acceptance": [
+      "Message count và timeline đối chiếu được log thô.",
+      "Báo cáo phân biệt safety/liveness và ghi rõ fixed leader stall.",
+      "Không tuyên bố chống hai Byzantine/auto leader recovery khi chưa cài."
+    ]
+  },
+  {
+    "key": "TV3-W5",
+    "week": 5,
+    "member": 3,
+    "title": "[TV3][W5] Triển khai máy mới và hướng dẫn vận hành",
+    "files": "scripts, config, docs/deployment.md, docs/report/deployment.md",
+    "reviewer": "TV4; TV1/TV2 về recovery",
+    "dependencies": [
+      "TV3-W4"
+    ],
+    "scope": [
+      "Checkout sạch trên máy khác; ổn định start/stop/log/config.",
+      "Hỗ trợ workload/fault và metadata môi trường/commit.",
+      "Chương triển khai/recovery; Docker/LAN chỉ sau khi lõi đạt."
+    ],
+    "acceptance": [
+      "Người khác theo README chạy bốn node/test không phụ thuộc path tác giả.",
+      "Không kill process ngoài repo hay xóa DB/keys âm thầm.",
+      "Docs ghi topology, dữ liệu tách biệt và giới hạn cùng laptop."
+    ]
+  },
+  {
+    "key": "TV4-W5",
+    "week": 5,
+    "member": 4,
+    "title": "[TV4][W5] Thực nghiệm, CSV, latency/TPS và biểu đồ",
+    "files": "experiments, scripts, docs/report/evaluation.md",
+    "reviewer": "TV2 (kết luận), TV3 (môi trường)",
+    "dependencies": [
+      "TV4-W4",
+      "TV1-W5",
+      "TV2-W4",
+      "TV3-W5"
+    ],
+    "scope": [
+      "Chạy baseline và kịch bản mục 16–17 kế hoạch, workload/warm-up/lặp có cấu hình.",
+      "Raw CSV + seed/config/commit/OS/CPU/RAM/version; committed/rejected/unfinished.",
+      "Tính TPS, latency p50/p95/p99, consistency, message count; plotting và chương đánh giá."
+    ],
+    "acceptance": [
+      "Công thức, mốc đo, đơn vị/thời lượng rõ; accepted không tính committed.",
+      "Báo cả unfinished/rejected/run lỗi, không loại để làm đẹp latency/TPS.",
+      "Dữ liệu thô/script/config đối chiếu được; TV2 review claim safety/liveness."
+    ]
+  },
+  {
+    "key": "TV1-W6",
+    "week": 6,
+    "member": 1,
+    "title": "[TV1][W6] Nghiệm thu core và demo chuyển coin/tamper",
+    "files": "src/core, docs/report, docs/demo",
+    "reviewer": "TV2, TV4",
+    "dependencies": [
+      "TV1-W5",
+      "TV4-W5"
+    ],
+    "scope": [
+      "Sửa lỗi core chặn release; chương core/bảng đóng góp/test evidence.",
+      "Demo chuyển coin/tamper và luyện giải thích hash/signature/nonce/atomic apply."
+    ],
+    "acceptance": [
+      "Regression core đạt trên commit release.",
+      "Demo có bằng chứng thật; chương core tích hợp báo cáo.",
+      "Tham gia hai lần tổng duyệt; không còn lỗi core chặn nghiệm thu."
+    ]
+  },
+  {
+    "key": "TV2-W6",
+    "week": 6,
+    "member": 2,
+    "title": "[TV2][W6] Nghiệm thu consensus và demo quorum/leader lỗi",
+    "files": "src/consensus, docs/report, docs/demo",
+    "reviewer": "TV1, TV3, TV4",
+    "dependencies": [
+      "TV2-W5",
+      "TV4-W5"
+    ],
+    "scope": [
+      "Review claim report/slide; sửa lỗi consensus chặn release.",
+      "Demo 2 phiếu chờ, 3 phiếu chốt, duplicate và leader lỗi; luyện vấn đáp."
+    ],
+    "acceptance": [
+      "Consensus/fault regression đạt trên commit release.",
+      "Vote/certificate demo bằng chữ ký/log thật.",
+      "Slide ghi đúng fixed leader/giới hạn; hai lần tổng duyệt đạt."
+    ]
+  },
+  {
+    "key": "TV3-W6",
+    "week": 6,
+    "member": 3,
+    "title": "[TV3][W6] Checkout sạch, release và demo restart/sync",
+    "files": "README, scripts, config, docs/deployment.md",
+    "reviewer": "TV1, TV2, TV4",
+    "dependencies": [
+      "TV3-W5",
+      "TV4-W5"
+    ],
+    "scope": [
+      "Chốt hướng dẫn cài/chạy/test/dừng/sinh keys/genesis và sửa lỗi cuối.",
+      "Đóng gói/tag sau cổng nghiệm thu toàn nhóm; demo follower restart/sync."
+    ],
+    "acceptance": [
+      "Checkout sạch chạy/test thành công và có commit SHA bằng chứng.",
+      "Release/config không chứa private key/.env/DB thật.",
+      "Checklist release đầy đủ, backup demo và hai lần tổng duyệt đạt."
+    ]
+  },
+  {
+    "key": "TV4-W6",
+    "week": 6,
+    "member": 4,
+    "title": "[TV4][W6] Nghiệm thu cuối, báo cáo/slide/video và demo",
+    "files": "docs/report, docs/demo, test report, slides/video",
+    "reviewer": "Cả nhóm",
+    "dependencies": [
+      "TV4-W5",
+      "TV1-W6",
+      "TV2-W6",
+      "TV3-W6"
+    ],
+    "scope": [
+      "Tổng hợp chương từng người viết, bảng đóng góp/test report/release.",
+      "Slide, demo khoảng 10 phút, video dự phòng, hướng dẫn máy mới.",
+      "Điều phối freeze/nghiệm thu/hai lần tổng duyệt, ghi phần chưa đạt."
+    ],
+    "acceptance": [
+      "Bộ bàn giao mục 20.2 đủ và khớp source/dữ liệu thật.",
+      "Test bắt buộc có bằng chứng, lỗi chặn được sửa hoặc báo rõ.",
+      "Hai lần tổng duyệt đạt; không tuyên bố PBFT/view change chưa kiểm chứng."
+    ]
+  }
+]

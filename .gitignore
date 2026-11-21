@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local configuration and validator private keys
+.env
+.env.*
+!.env.example
+!**/.env.example
+keys/
+*.key
+*.pem
+
+# Per-node runtime files
+data/
+logs/
+.run/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
+
+# Local tools and editors
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,24 @@
+name: Đầu việc
+description: Công việc có người phụ trách, đầu ra và tiêu chí nghiệm thu.
+title: "[TV?][W?] "
+body:
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Phụ trách và review
+      description: Vai trò hoặc username, tuần/mốc, người review và issue phụ thuộc.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Công việc và sản phẩm bàn giao
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Tiêu chí nghiệm thu
+      description: Viết checklist với hành vi quan sát được và test cần chạy.
+    validations:
+      required: true

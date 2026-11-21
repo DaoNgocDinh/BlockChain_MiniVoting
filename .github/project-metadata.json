@@ -1,0 +1,100 @@
+{
+  "labels": [
+    {
+      "name": "owner:tv1",
+      "color": "1d76db",
+      "description": "Vai trò thành viên 1; xem docs/phan-cong.md"
+    },
+    {
+      "name": "owner:tv2",
+      "color": "8250df",
+      "description": "Vai trò thành viên 2; xem docs/phan-cong.md"
+    },
+    {
+      "name": "owner:tv3",
+      "color": "0e8a16",
+      "description": "Vai trò thành viên 3; xem docs/phan-cong.md"
+    },
+    {
+      "name": "owner:tv4",
+      "color": "d876e3",
+      "description": "Vai trò thành viên 4; xem docs/phan-cong.md"
+    },
+    {
+      "name": "priority:critical",
+      "color": "b60205",
+      "description": "Đường găng hoặc ảnh hưởng safety"
+    },
+    {
+      "name": "priority:normal",
+      "color": "fbca04",
+      "description": "Công việc trong kế hoạch"
+    },
+    {
+      "name": "area:core",
+      "color": "c5def5",
+      "description": "Phạm vi core"
+    },
+    {
+      "name": "area:consensus",
+      "color": "c5def5",
+      "description": "Phạm vi consensus"
+    },
+    {
+      "name": "area:network-storage",
+      "color": "c5def5",
+      "description": "Phạm vi network-storage"
+    },
+    {
+      "name": "area:frontend",
+      "color": "c5def5",
+      "description": "Phạm vi frontend"
+    },
+    {
+      "name": "area:testing",
+      "color": "c5def5",
+      "description": "Phạm vi testing"
+    },
+    {
+      "name": "area:experiments",
+      "color": "c5def5",
+      "description": "Phạm vi experiments"
+    },
+    {
+      "name": "area:docs",
+      "color": "c5def5",
+      "description": "Phạm vi docs"
+    },
+    {
+      "name": "type:task",
+      "color": "bfdadc",
+      "description": "Đầu việc có tiêu chí nghiệm thu"
+    }
+  ],
+  "milestones": [
+    {
+      "title": "W1 - Đặc tả và hợp đồng chung",
+      "description": "Tuần 1 trong kế hoạch 6 tuần; chưa chốt lịch nên không đặt due date."
+    },
+    {
+      "title": "W2 - Core và giao tiếp tối thiểu",
+      "description": "Tuần 2 trong kế hoạch 6 tuần; chưa chốt lịch nên không đặt due date."
+    },
+    {
+      "title": "W3 - Đồng thuận end-to-end",
+      "description": "Tuần 3 trong kế hoạch 6 tuần; chưa chốt lịch nên không đặt due date."
+    },
+    {
+      "title": "W4 - Fault, persistence và sync",
+      "description": "Tuần 4 trong kế hoạch 6 tuần; chưa chốt lịch nên không đặt due date."
+    },
+    {
+      "title": "W5 - Thực nghiệm và đánh giá",
+      "description": "Tuần 5 trong kế hoạch 6 tuần; chưa chốt lịch nên không đặt due date."
+    },
+    {
+      "title": "W6 - Freeze, release và bảo vệ",
+      "description": "Tuần 6 trong kế hoạch 6 tuần; chưa chốt lịch nên không đặt due date."
+    }
+  ]
+}

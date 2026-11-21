@@ -1,0 +1,42 @@
+name: Project metadata
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: project-metadata
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const config = JSON.parse(fs.readFileSync('.github/project-metadata.json', 'utf8'));
+            const repo = context.repo;
+            const labels = await github.paginate(github.rest.issues.listLabelsForRepo, {...repo, per_page: 100});
+            for (const label of config.labels) {
+              if (labels.some(current => current.name === label.name)) {
+                await github.rest.issues.updateLabel({...repo, name: label.name, color: label.color, description: label.description});
+              } else {
+                await github.rest.issues.createLabel({...repo, ...label});
+              }
+            }
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {...repo, state: 'all', per_page: 100});
+            for (const milestone of config.milestones) {
+              if (!milestones.some(current => current.title === milestone.title)) {
+                await github.rest.issues.createMilestone({...repo, ...milestone});
+              }
+            }
+            core.summary.addHeading('Project metadata ready');
+            core.summary.addRaw(`${config.labels.length} labels; ${config.milestones.length} milestones. No due dates invented.`);
+            await core.summary.write();
