@@ -72,7 +72,7 @@ CI sang cài từ lockfile và ghi lại phiên bản thực tế trên máy nh�
   phương pháp đo và tiến độ sáu tuần.
 - [Phân công và review](docs/phan-cong.md).
 - [Quy trình Git và Definition of Done](CONTRIBUTING.md).
-- [API và schema cần thống nhất](docs/api-contract.md).
+- [Đề xuất hợp đồng giao tiếp v1](docs/api-contract.md): HTTP, mô hình dữ liệu ký và interface giữa các module.
 - [Backlog theo tuần](docs/backlog.md).
 - [Thiết lập bảo vệ main](docs/github-setup.md).
 - [Issues](https://github.com/DaoNgocDinh/BlockChain_MiniVoting/issues).
