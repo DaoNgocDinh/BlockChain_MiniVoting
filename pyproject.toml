@@ -2,7 +2,7 @@
 name = "blockchain-mini-voting"
 version = "0.0.1"
 description = "Four-validator permissioned blockchain coursework scaffold"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.12,<3.15"
 dependencies = [
   "fastapi==0.115.12",
   "uvicorn==0.34.2",
