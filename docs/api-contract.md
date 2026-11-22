@@ -8,6 +8,7 @@ Tài liệu này quy định giao tiếp HTTP. [Mô hình dữ liệu và chữ 
 
 - Cổng mặc định theo [topology](../config/nodes.json) là 8001–8004. Ví, dashboard và peer gọi cùng API của từng node. Giao thức dành cho mạng demo được kiểm soát. Xác thực phiếu bằng khóa công khai từ genesis cục bộ. Host, IP, ID tự khai và thông tin ở API quan sát chỉ dùng để định tuyến hoặc hiển thị.
 - Request có body dùng `Content-Type: application/json`, UTF-8. Chỉ nhận `Content-Encoding: identity` hoặc không gửi header này. Kiểm số byte thực đọc trước khi parse. Giới hạn 4 KiB cho giao dịch và vote, 512 KiB cho proposal và thông báo finalized. Giới hạn byte của Block chuẩn hóa và số giao dịch một block lấy từ genesis trong trần v1.
+- `1 KiB = 1024 byte`. Áp dụng giới hạn theo route cả khi thiếu `Content-Length` hoặc body gửi thành nhiều chunk. Nếu lớp HTTP phía ngoài có trần tổng quát lớn hơn, giới hạn route ở trên vẫn áp dụng.
 - Dùng `snake_case`. Trừ field được ghi nullable, field đã khai báo là bắt buộc và không nhận `null`. Kiểm kiểu chặt, từ chối key lặp và field lạ với các đối tượng wire. Không nhận bool, float hoặc chuỗi thay cho số nguyên trong JSON. Query/path số dùng chữ số thập phân không dấu, trong khoảng tương ứng. Hash, địa chỉ, chữ ký và ID tuân theo mô hình wire.
 - `uint` là `UInt` trong mô hình wire. `target_height = committed_height + 1`. Các timestamp hậu tố `_ms` dùng mili giây Unix UTC theo đồng hồ node quan sát. `timestamp_ms` trong header tham gia hash của block và không tham gia tính toán state.
 - API trả JSON và `Cache-Control: no-store` cho dữ liệu động. Đọc các field đã chốt trong một snapshot cục bộ nhất quán. Các node có thể báo khác nhau trong lúc đồng bộ. Đăng ký hai route tĩnh `/consensus/proposal`, `/consensus/status` trước route động `/consensus/{height}` trong FastAPI.
@@ -30,8 +31,9 @@ Tài liệu này quy định giao tiếp HTTP. [Mô hình dữ liệu và chữ 
 | 422 | `INVALID_REQUEST`, `INVALID_TRANSACTION`, `INVALID_SIGNATURE`, `INVALID_BLOCK`, `INVALID_CERTIFICATE`, `UNAUTHORIZED_VALIDATOR` | Kiểu, cấu trúc, hash, chữ ký hoặc bằng chứng không hợp lệ. Sửa dữ liệu trước khi gửi lại |
 | 429 | `MEMPOOL_FULL`, `EARLY_BUFFER_FULL` | Hàng đợi nhận đã đầy. Có thể gửi lại sau với backoff |
 | 503 | `CONSENSUS_NOT_READY`, `NODE_SYNCING`, `NODE_HALTED` | Node chưa phục vụ thao tác này. `NODE_HALTED` cần điều tra trước khi chạy lại |
+| 503 | `STORAGE_BUSY` | Hết deadline chờ khóa DB. Có thể retry cùng request; node kiểm lại bản ghi đã tồn tại trước khi ghi/gửi |
 
-Khi trả `429`, node gửi `Retry-After` theo giây (mặc định 2). Lỗi 5xx ngoài bảng và lỗi mạng được client hiển thị như lỗi tạm thời. Chi tiết nội bộ ghi log; không đưa khóa, stack trace hay đường dẫn máy vào API.
+Khi trả `429` hoặc `503 STORAGE_BUSY`, node gửi `Retry-After` theo giây (mặc định 2). Lỗi 5xx ngoài bảng và lỗi mạng được client hiển thị như lỗi tạm thời. Chi tiết nội bộ ghi log; không đưa khóa, stack trace hay đường dẫn máy vào API.
 
 ## 2. Endpoint cho ví, dashboard và công cụ
 
@@ -65,7 +67,7 @@ Các request GET không được gửi body. Query ngoài bảng và tham số s
 
 - `TxSubmission = {tx_id: Hash32, admission: "accepted" | "already-known", status: "pending" | "proposed" | "committed", observed_node_id: NodeId}`. Gửi lại cùng `tx_id` với dữ liệu hợp lệ trả `already-known`. Cả ví lẫn follower phải gửi lại cùng giao dịch đã ký khi kết quả gửi chưa rõ. Node vẫn xác thực giao dịch trước khi xử lý trùng. Sau ghi sổ, `tx_id` chỉ được áp dụng một lần.
 - Node kiểm tra giao dịch theo snapshot đã chốt, một giao dịch chờ mỗi sender và giới hạn dung lượng mempool tối đa 1.024 giao dịch. V1 nhận nonce kế tiếp và số dư đủ. Định nghĩa thực thi block theo thứ tự ở core vẫn áp dụng cho nhiều giao dịch của cùng sender trong block.
-- Follower nhận và xếp hàng chuyển tiếp đúng bytes giao dịch đã ký tới leader qua `POST /transactions`. Leader là điểm nhận cuối. 202 xác nhận node nhận cục bộ, có thể mất khi khởi động lại nếu chưa chốt. Follower dùng HTTP timeout 1 giây mỗi lần, tối đa 5 lần retry sau lần đầu cho lỗi mạng/429/503/5xx, với backoff từ 0,5 giây, nhân đôi đến trần 5 giây và tôn trọng `Retry-After` trong thời hạn hàng đợi. 4xx khác là phản hồi cuối của lượt chuyển tiếp. Hàng đợi forward không vượt giới hạn mempool, không có luồng forward đệ quy.
+- Follower nhận và xếp hàng chuyển tiếp đúng bytes giao dịch đã ký tới leader qua `POST /transactions`. Leader là điểm nhận cuối. 202 xác nhận node nhận cục bộ, có thể mất khi khởi động lại nếu chưa chốt. Follower dùng `peer_request_timeout_s` (mặc định 1 giây) theo [cấu hình thời gian vận hành](module-interfaces.md#cấu-hình-thời-gian-vận-hành), tối đa 5 lần retry sau lần đầu cho lỗi mạng/429/503/5xx, với backoff từ 0,5 giây, nhân đôi đến trần 5 giây và tôn trọng `Retry-After` trong thời hạn hàng đợi. 4xx khác là phản hồi cuối của lượt chuyển tiếp. Hàng đợi forward không vượt giới hạn mempool, không có luồng forward đệ quy.
 - `TxLookup = {tx_id: Hash32, status: TxStatus, observed_node_id: NodeId, height: uint | null, block_hash: Hash32 | null, reason: string | null}`. Chọn trạng thái theo thứ tự kiểm tra sau.
 
 | `TxStatus` | Điều kiện tại node | `height` và `block_hash` | `reason` |
@@ -118,6 +120,24 @@ Giao dịch đang chờ mà chưa vào proposal hết hạn sau 300 giây kể t
 - Wrong chain/version/view/phase trả 409 `CONTEXT_MISMATCH`. Proposal/vote ở height tương lai trả 409 `HEIGHT_AHEAD`; không lưu buffer cho height tương lai. Chỉ giữ tối đa 50 phiếu đến sớm đã qua xác thực cơ bản ở target hiện tại. Nếu phát hiện vote ký hai hash cho cùng context, lưu bằng chứng rồi trả 409 `VOTE_CONFLICT`. Một proposal hợp lệ xung đột lock trả 409 `PROPOSAL_CONFLICT`.
 - Với finalized trùng hash ở height đã chốt, kiểm chữ ký và điều kiện proof rồi trả 200 `duplicate`. Nếu có proof hợp lệ cho hai hash khác nhau tại cùng height đã chốt cục bộ, halt, ghi bằng chứng và trả 503 `NODE_HALTED`. Nếu chỉ có lock của proposal chưa chốt, vẫn có thể nhận block đã có proof hợp lệ sau khi kiểm đầy đủ và áp dụng atomically.
 - Đồng bộ và retry không cấp quyền ký giá trị mới ở cùng height. Khi STALLED, phát lại phiếu đã lưu theo lịch trong [interface module](module-interfaces.md). Trạng thái/counter nhận qua GET chỉ là gợi ý. Validate lại từng dữ liệu lấy từ peer trước khi nâng committed height.
+
+### Nhận block đã chốt
+
+`POST /peer/finalized` dùng `FinalizedBlock` gồm đúng `proposal` và `certificate`. Follower có thể chốt block kế tiếp dù chưa có own PREPARE, own COMMIT hoặc prepared certificate cục bộ. Thực hiện đủ các bước sau trước khi trả `applied`.
+
+1. Kiểm schema, version, chain, view, chữ ký leader trên SignedContext và sự khớp nhau của mọi trường context trong proposal, block và certificate.
+2. Dựng lại COMMIT cho từng signer, kiểm toàn bộ chữ ký có trong certificate và quorum tối thiểu 3 danh tính khác nhau thuộc genesis.
+3. Đọc snapshot, kiểm height kế tiếp và `prev_hash`, tính lại hash, kiểm từng giao dịch và thực thi lại trên committed state của parent để đối chiếu `state_hash`.
+4. Gọi `apply_committed_block` với snapshot đã kiểm. Trong transaction ngắn, so lại base rồi ghi block, certificate, chỉ mục giao dịch, state và height nguyên tử. Nếu base đổi, đọc và kiểm lại trước khi ghi. Chỉ công bố committed sau commit DB.
+
+| Height so với tip cục bộ | Kết quả |
+|---|---|
+| Kế tiếp (`committed_height + 1`) | Sau đầy đủ kiểm tra và ghi DB thành công, 200 `applied`. Lock của proposal chưa chốt được xử lý trong cùng transaction |
+| Đã chốt, cùng hash | Kiểm proof và trả 200 `duplicate`, giữ state hiện tại |
+| Đã chốt, khác hash | Xác minh proof cạnh tranh trên state của parent tương ứng. Proof sai bị loại. Hai proof hợp lệ xung đột làm node halt và trả 503 `NODE_HALTED` |
+| Lớn hơn height kế tiếp | Kiểm context, chữ ký và hash tĩnh rồi trả 202 `sync-required`. Kéo và xác minh từng parent còn thiếu trước khi nhập block |
+
+Mã lỗi schema, chữ ký, block, certificate và storage dùng bảng ở mục 1. Một COMMIT riêng lẻ hoặc các bộ đếm từ API quan sát tiếp tục đi qua luồng kiểm phiếu tương ứng. Đường nhập finalized dùng proof đầy đủ và không tạo thêm chữ ký của node nhận.
 
 ## 4. Đối chiếu PR protocol và nghiệm thu
 

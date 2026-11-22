@@ -95,20 +95,55 @@ const sharedContext = {
 assert.deepEqual(proposalFields, { ...sharedContext, phase: 'PROPOSE', sender_id: genesis.leader_id });
 checkVector(proposalFields, 'PROPOSE', expected.proposal_signing_bytes_hex, validators.get(genesis.leader_id), proposalSignature);
 
-function checkCertificate(phase, subject, { signatures, ...certContext }) {
+// Proposal signatures cover SignedContext. Attachments still need independent hash validation.
+const leaderKey = validators.get(genesis.leader_id);
+assert.ok(!validSignature('PROPOSE', { ...proposalFields, block }, leaderKey, proposalSignature));
+assert.ok(!validSignature('PROPOSE', { ...proposalFields, block_hash: '0'.repeat(64) }, leaderKey, proposalSignature));
+const reorderedProposal = Object.fromEntries(Object.entries(proposal).reverse());
+const { block: reorderedBlock, signature: reorderedSignature, ...reorderedContext } = reorderedProposal;
+assert.equal(signingBytes('PROPOSE', reorderedContext).toString('hex'), expected.proposal_signing_bytes_hex);
+assert.ok(validSignature('PROPOSE', reorderedContext, leaderKey, reorderedSignature));
+assert.deepEqual(reorderedBlock, block);
+
+const changedHeader = { ...block.header, timestamp_ms: block.header.timestamp_ms + 1 };
+assert.ok(validSignature('PROPOSE', proposalFields, leaderKey, proposalSignature));
+assert.notEqual(sha256(canonicalJson(changedHeader)), proposalFields.block_hash);
+const changedTransactions = [{ ...transaction, amount: transaction.amount + 1 }];
+assert.notEqual(sha256(canonicalJson(changedTransactions)), block.header.tx_list_hash);
+
+function checkCertificateSignatures(phase, { signatures, ...certContext }) {
   assert.deepEqual(certContext, sharedContext);
   const signers = Object.entries(signatures);
   assert.ok(signers.length >= genesis.quorum && signers.length <= validators.size);
-  assert.equal(subject.length, signers.length);
   for (const [senderId, signature] of signers) {
+    assert.ok(validators.has(senderId), `Unknown validator ${senderId}`);
+    const vote = { ...certContext, phase, sender_id: senderId };
+    assert.ok(validSignature(phase, vote, validators.get(senderId), signature), `${phase} by ${senderId}`);
+  }
+}
+
+function checkCertificate(phase, subject, cert) {
+  checkCertificateSignatures(phase, cert);
+  const { signatures, ...certContext } = cert;
+  assert.equal(subject.length, Object.keys(signatures).length);
+  for (const [senderId, signature] of Object.entries(signatures)) {
     const vote = { ...certContext, phase, sender_id: senderId };
     assert.deepEqual(subject.find(({ sender_id: id }) => id === senderId), { ...vote, signature });
-    assert.ok(validSignature(phase, vote, validators.get(senderId), signature), `${phase} by ${senderId}`);
   }
 }
 
 checkCertificate('PREPARE', prepareVotes, preparedCertificate);
 checkCertificate('COMMIT', commitVotes, certificate);
+
+// The received finalized proof carries proposal + COMMIT certificate, independently of local PREPAREs.
+assert.deepEqual(Object.keys(fixture.finalized_block).sort(), ['certificate', 'proposal']);
+checkCertificateSignatures('COMMIT', fixture.finalized_block.certificate);
+const belowQuorum = { ...certificate, signatures: Object.fromEntries(Object.entries(certificate.signatures).slice(0, 2)) };
+assert.throws(() => checkCertificateSignatures('COMMIT', belowQuorum), assert.AssertionError);
+const invalidFourthSigner = { ...certificate, signatures: { ...certificate.signatures, node4: '0'.repeat(128) } };
+assert.equal(Object.keys(invalidFourthSigner.signatures).length, 4);
+assert.throws(() => checkCertificateSignatures('COMMIT', invalidFourthSigner), assert.AssertionError);
+assert.throws(() => checkCertificateSignatures('COMMIT', preparedCertificate), assert.AssertionError);
 
 const cases = [
   [prepareVotes, expected.prepare_node2_signing_bytes_hex],

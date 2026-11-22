@@ -93,7 +93,9 @@ thủ `max_block_bytes` trên byte chuẩn của toàn bộ `Block`.
   và `block: Block` ở cùng cấp. `sender_id` bằng leader và `header.proposer_id`.
   `protocol_version`, `chain_id`, `height` và `block_hash` phải khớp các trường
   tương ứng trong block. Chữ ký bao phủ context đầy đủ, còn `block_hash` cam kết
-  header và nội dung qua các phép băm ở mục 6. Bên nhận xác minh cả hai.
+  header và nội dung qua các phép băm ở mục 6. Bên nhận xác minh cả hai. Khi ký
+  hoặc xác minh, lấy đúng bảy trường `SignedContext`; trường `block` và
+  `signature` cùng cấp thuộc envelope. Mục 6 có phép chiếu trường cụ thể.
 - `Vote` là `SignedContext` với `phase = PREPARE` hoặc `COMMIT`, thêm
   `signature: Signature64` ở cùng cấp. Gửi trực tiếp trong body của endpoint pha
   tương ứng. Validator kiểm đầy đủ context, danh tính và chữ ký trước khi đưa vote
@@ -117,6 +119,12 @@ certificate. `PreparedCertificate` là điều kiện để validator tự ký C
 Peer đồng bộ xác minh `FinalizedBlock` bằng `CommitCertificate`. Certificate
 đứng ngoài `Block` và không tham gia `block_hash`. Hai certificate hợp lệ với
 tập chữ ký khác nhau vẫn có thể chứng nhận cùng block.
+
+Đường nhận `POST /peer/finalized` và đồng bộ dùng cùng điều kiện xác minh. Với
+block kế tiếp tip, node được ghi kết quả sau khi đã kiểm đầy đủ proposal, hash,
+chữ ký giao dịch, thực thi lại trên committed state và commit certificate,
+kể cả khi node chưa có own vote hoặc prepared certificate. Điều kiện ghi nguyên
+tử và phân loại height nằm trong [hợp đồng HTTP](api-contract.md#nhận-block-đã-chốt).
 
 ## 5. Chuẩn hóa byte JSON
 
@@ -158,6 +166,23 @@ trong `SignedContext`. Dùng Ed25519 theo [RFC 8032 §5.1](https://www.rfc-edito
 trên toàn bộ chuỗi byte này, truyền thẳng vào API signer/verifier của thư viện
 trong chế độ Ed25519 thông thường. Dùng khóa của sender cho TX và khóa validator
 trong genesis cho các pha đồng thuận.
+
+Phép chiếu cho Proposal đã qua kiểm tra toàn bộ schema được xác định như sau.
+
+```python
+context_fields = (
+    "protocol_version", "chain_id", "height", "view",
+    "phase", "block_hash", "sender_id",
+)
+fields = {name: proposal[name] for name in context_fields}
+message_bytes = b"MINIVOTING-V1/PROPOSE\x00" + canonical_bytes(fields)
+```
+
+Phần `block` được kiểm riêng bằng cách tính lại `tx_list_hash`, `state_hash` và
+`block_hash`, rồi so với SignedContext và certificate. Chữ ký context hợp lệ
+cùng một attachment bị sửa vẫn phải bị loại khi kiểm dữ liệu block. Fixture và
+script kiểm chứng có tình huống này, đồng thời kiểm việc đưa cả attachment vào
+bytes ký sẽ không khớp chữ ký mẫu.
 
 Quy tắc này cụ thể hóa yêu cầu ký full context và phân tách domain trong
 [kế hoạch §7.4–7.5](ke-hoach.md#74-thông-điệp-đồng-thuận). Khi duyệt
