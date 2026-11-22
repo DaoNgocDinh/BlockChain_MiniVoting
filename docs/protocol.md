@@ -3,8 +3,8 @@
 - **Mã tài liệu:** `TV2-W1-PROTOCOL`
 - **Người phụ trách:** TV2 · Nguyễn Minh Đức (@DucNguyen)
 - **Người thẩm định (Reviewers):** TV1 (Core), TV3 (Network/Storage), TV4 (Frontend/Evaluation)
-- **Phiên bản:** 1.0 (Draft Tuần 1)
-- **Tình trạng:** Chờ review nội bộ nhóm
+- **Phiên bản:** 1.1 (Cập nhật theo Review TV4/Trưởng nhóm)
+- **Tình trạng:** Đã hoàn thiện các điểm phản biện kỹ thuật W1
 
 ---
 
@@ -27,7 +27,14 @@ Giao thức này quy định cơ chế đồng thuận đạt sự nhất quán 
 - **Định danh bằng khóa mật mã:** Mỗi validator sở hữu một cặp khóa bất đối xứng Ed25519 riêng biệt. Danh sách Public Key của 4 node được công bố và chốt cứng từ Genesis.
 - **Kênh truyền:** Mạng bất đồng bộ có điều kiện (*Partial Synchrony*). Thông điệp có thể bị trễ, xáo trộn thứ tự hoặc mất tạm thời, nhưng được bảo đảm truyền tới đích sau một khoảng thời gian hữu hạn nhờ cơ chế Timeout và Retry.
 
-### 2.2 Mô hình lỗi Byzantine (Byzantine Fault Tolerance - BFT)
+### 2.2 Quy ước Chiều cao Khối (Height Conventions)
+Để tránh nhầm lẫn giữa trạng thái sổ cái đã chốt và trạng thái đang xử lý đồng thuận:
+- **`committed_height`:** Chiều cao của khối cao nhất đã được chốt (*finalized*) và ghi bền vững vào cơ sở dữ liệu SQLite cục bộ (sau Genesis, `committed_height = 0`).
+- **`target_height`:** Chiều cao của khối đang được xử lý trong vòng đồng thuận hiện tại, luôn thỏa mãn:
+  $$\text{target\_height} = \text{committed\_height} + 1$$
+- **Phát hiện đồng bộ (Sync Detection):** Khi nhận thấy `peer_committed_height > local_committed_height`, node nhận biết mình đang bị tụt hậu và phải kích hoạt quy trình đồng bộ (*Sync*), kể cả khi `peer_committed_height == local_target_height`.
+
+### 2.3 Mô hình lỗi Byzantine (Byzantine Fault Tolerance - BFT)
 - Hệ thống áp dụng định lý BFT cổ điển:
   $$n \ge 3f + 1$$
 - Với $n = 4$, số lỗi Byzantine tối đa mà hệ thống chịu được là:
@@ -55,12 +62,12 @@ Giao thức này quy định cơ chế đồng thuận đạt sự nhất quán 
 ### 3.2 Bất biến An toàn (Safety Invariants)
 
 1. **Bất biến 1 (Quy tắc cấm ký hai lần - No Double-Signing):**
-   Một validator trung thực không bao giờ ký hai thông điệp có nội dung khác nhau cho cùng một ngữ cảnh (*Context*):
-   $$\text{Context} = \langle \text{chain\_id}, \text{height}, \text{view}, \text{phase} \rangle$$
+   Một validator trung thực không bao giờ ký hai thông điệp có nội dung khác nhau cho cùng một ngữ cảnh đầy đủ (*Full Context*):
+   $$\text{Context} = \langle \text{protocol\_version}, \text{chain\_id}, \text{target\_height}, \text{view} = 0, \text{phase} \rangle$$
 2. **Bất biến 2 (Bảo vệ tính toàn vẹn của chuỗi - Fork-Free):**
-   Nhờ Bất biến 1 và tính chất giao Quorum, không thể tồn tại hai khối khác nhau $B \ne B'$ cùng đạt đủ $q=3$ chữ ký COMMIT tại cùng một `height`. Chuỗi sổ cái là duy nhất và tuyến tính.
+   Nhờ Bất biến 1 và tính chất giao Quorum, không thể tồn tại hai khối khác nhau $B \ne B'$ cùng đạt đủ $q=3$ chữ ký COMMIT tại cùng một `target_height`. Chuỗi sổ cái là duy nhất và tuyến tính.
 3. **Bất biến 3 (Không đảo ngược trạng thái - Finality Immutability):**
-   Khi một khối đã đạt `CommitCertificate` hợp lệ (gồm đủ 3 chữ ký COMMIT hợp lệ), khối đó được coi là chốt vĩnh viễn (*Finalized*), không bao giờ bị hoàn tác (reorg) hay thay thế.
+   Khi một khối đã đạt `CommitCertificate` hợp lệ (gồm đủ 3 chữ ký COMMIT hợp lệ khớp Context), khối đó được coi là chốt vĩnh viễn (*Finalized*), không bao giờ bị hoàn tác (reorg) hay thay thế.
 
 ---
 
@@ -73,9 +80,11 @@ Mọi validator (kể cả Leader `node1`) đều phải tham gia quy trình b�
              │                                                 │
              │─────── PROPOSE(Block) ─────────────────────────>│  (Pha 1: Đề xuất)
              │                                                 │
+             │   [Persist Lock & Own PREPARE trước khi gửi]    │
              │<────── PREPARE(block_hash) ────────────────────>│  (Pha 2: Thống nhất thứ tự)
              │   (Broadcast all-to-all, thu thập đủ 3/4 phiếu)  │
              │                                                 │
+             │   [Persist Own COMMIT trước khi gửi]            │
              │<────── COMMIT(block_hash) ─────────────────────>│  (Pha 3: Cam kết chốt sổ)
              │   (Broadcast all-to-all, thu thập đủ 3/4 phiếu)  │
              │                                                 │
@@ -87,48 +96,50 @@ Mọi validator (kể cả Leader `node1`) đều phải tham gia quy trình b�
 - **Chủ thể:** Duy nhất **Leader (`node1`)**.
 - **Điều kiện kích hoạt:**
   - Leader nhận giao dịch hợp lệ từ client/mempool.
-  - Khối trước đó tại `height - 1` đã được chốt (hoặc bắt đầu từ Genesis ở `height = 1`).
+  - Vòng trước đó tại `committed_height` đã hoàn tất (hoặc bắt đầu từ Genesis ở `committed_height = 0`, `target_height = 1`).
 - **Quy trình xử lý tại Leader:**
   1. Chọn danh sách giao dịch từ mempool.
   2. Thực thi thử tuần tự các giao dịch trên bản sao trạng thái tài khoản để tính `state_hash` và `tx_list_hash`.
-  3. Đóng gói Header: `height`, `prev_hash`, `timestamp_ms`, `proposer_id`, `state_hash`, `tx_list_hash`.
+  3. Đóng gói Header: `height = target_height`, `prev_hash = tip_hash`, `timestamp_ms`, `proposer_id = 'node1'`, `state_hash`, `tx_list_hash`.
   4. Tính `block_hash = SHA256(canonical_bytes(Header))`.
   5. Leader ký đề xuất: `proposal_sig = Sign(leader_private_key, block_hash)`.
-  6. **Ghi đĩa trước (Persist-Before-Send):** Leader lưu `proposal` vào SQLite.
+  6. **Ghi đĩa trước (Persist-Before-Send):** Leader lưu `proposal` vào SQLite để sẵn sàng phát lại nếu peer yêu cầu.
   7. Broadcast thông điệp `PROPOSE` kèm toàn bộ dữ liệu khối cho tất cả các node.
 
 ### 4.2 Pha 2: PREPARE (Xác thực và Khóa thứ tự)
 - **Chủ thể:** **Tất cả các Validator (kể cả Leader)**.
 - **Quy trình tiếp nhận và thẩm định tại Validator $V_i$:**
-  1. **Kiểm tra cơ sở:** Đúng `protocol_version`, đúng `chain_id`, đúng `view = 0`.
+  1. **Kiểm tra cơ sở (Context):** Đúng `protocol_version`, đúng `chain_id`, đúng `view = 0`.
   2. **Kiểm tra Proposer:** `proposer_id` phải là `node1` và chữ ký proposal hợp lệ.
-  3. **Kiểm tra chuỗi:** `height` phải bằng `current_height + 1`; `prev_hash` phải khớp với hash khối chốt gần nhất.
+  3. **Kiểm tra chuỗi:** `height` phải bằng `target_height` (`committed_height + 1`); `prev_hash` phải khớp với hash khối chốt gần nhất (`tip_hash`).
   4. **Kiểm tra nghiệp vụ (State verification):** Tự thực thi lại danh sách giao dịch, đối chiếu `state_hash` và `tx_list_hash`. Nếu sai lệch $\rightarrow$ Từ chối và ghi log `REJECT`.
-  5. **Kiểm tra Khóa bền vững:** $V_i$ chưa từng ký một `block_hash` nào khác tại `height` này.
-- **Bỏ phiếu:**
-  1. $V_i$ tạo thông điệp vote `PREPARE` với `block_hash`.
-  2. **Persist-Before-Send:** Ghi phiếu bầu của mình vào SQLite bảng `consensus_votes`.
-  3. Broadcast thông điệp `PREPARE` tới toàn bộ $n=4$ node.
+  5. **Kiểm tra Khóa bền vững:** $V_i$ chưa từng khóa một `block_hash` nào khác tại `target_height` này.
+- **Lưu khóa và Bỏ phiếu (Persist-Before-Send bắt buộc - Tiêu chí T22, T29):**
+  1. $V_i$ tạo thông điệp vote `PREPARE` cho `block_hash`.
+  2. **Lưu nguyên tử vào SQLite TRƯỚC KHI phát mạng:**
+     - Ghi khóa bền vững: `consensus_locks(height = target_height, locked_block_hash = block_hash)`.
+     - Ghi phiếu bầu của chính mình: `consensus_votes(height = target_height, phase = 'PREPARE', ...)`.
+  3. Chỉ sau khi Database commit thành công, $V_i$ mới broadcast thông điệp `PREPARE` tới toàn bộ $n=4$ node.
 - **Tạo Prepared Certificate:**
-  - Mỗi node duy trì một bộ thu thập phiếu (`VoteSet`).
-  - Khi thu thập đủ $\ge 3$ phiếu `PREPARE` hợp lệ, từ các validator khác nhau, có cùng `block_hash` tại `height` hiện tại $\Rightarrow$ Tạo thành **`PreparedCertificate`**.
-  - Node tiến hành **Khóa (Lock)** vào `block_hash` này.
+  - Mỗi node duy trì một bộ thu thập phiếu (`VoteSet`) cho pha PREPARE.
+  - Khi thu thập đủ $\ge 3$ phiếu `PREPARE` hợp lệ, từ các validator khác nhau, khớp toàn bộ Context và có cùng `block_hash` tại `target_height` $\Rightarrow$ Tạo thành **`PreparedCertificate`**.
 
 ### 4.3 Pha 3: COMMIT (Cam kết chốt vào sổ cái)
 - **Chủ thể:** **Tất cả các Validator** (chỉ thực hiện sau khi đã sở hữu `PreparedCertificate`).
 - **Quy trình xử lý tại Validator $V_i$:**
   1. Sau khi đạt trạng thái *Prepared*, $V_i$ tạo thông điệp vote `COMMIT` cho `block_hash` đã khóa.
-  2. **Persist-Before-Send:** Ghi phiếu `COMMIT` của mình vào SQLite.
+  2. **Persist-Before-Send:** Ghi phiếu `COMMIT` của mình vào SQLite bảng `consensus_votes` trước khi phát mạng.
   3. Broadcast thông điệp `COMMIT` tới toàn bộ $n=4$ node.
 - **Tạo Commit Certificate và Chốt sổ (Finalization):**
-  - Khi node thu thập đủ $\ge 3$ phiếu `COMMIT` hợp lệ, từ các validator khác nhau, cùng `block_hash` tại `height` hiện tại $\Rightarrow$ Tạo thành **`CommitCertificate`**.
+  - Khi node thu thập đủ $\ge 3$ phiếu `COMMIT` hợp lệ, từ các validator khác nhau, khớp toàn bộ Context và cùng `block_hash` tại `target_height` $\Rightarrow$ Tạo thành **`CommitCertificate`**.
   - **Commit nguyên tử (Atomic DB Transaction):**
     - Ghi dữ liệu Block vào bảng `blocks`.
     - Ghi `CommitCertificate` vào bảng `certificates`.
     - Cập nhật số dư (balance) và nonce của các tài khoản vào bảng `accounts`.
     - Xóa các giao dịch đã chốt khỏi mempool.
-    - Cập nhật `current_height = current_height + 1`.
-  - Node phát sự kiện đã chốt và sẵn sàng tiếp nhận `height` tiếp theo.
+    - Xóa `consensus_locks` của `target_height` đã hoàn tất.
+    - Cập nhật `committed_height = target_height`.
+  - Node phát sự kiện đã chốt và sẵn sàng tăng `target_height` cho vòng tiếp theo.
 
 ---
 
@@ -152,8 +163,8 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 }
 ```
 
-*Ghi chú:*
-- `phase`: Chỉ nhận giá trị `"PREPARE"` hoặc `"COMMIT"`.
+*Ghi chú (Tiêu chí T14):*
+- Kiểm tra tính hợp lệ của Context: Mọi trường `protocol_version`, `chain_id`, `height`, `view`, `phase` phải khớp tuyệt đối với vòng đồng thuận hiện tại trước khi thẩm định chữ ký và đưa vào tính Quorum.
 - Chữ ký `signature` được tính bằng thuật toán Ed25519 trên byte chuẩn hóa của thông điệp **sau khi đã bỏ qua trường `signature`**:
   $$\text{signature} = \text{Sign}_{SK}(\text{canonical\_bytes}(\text{Vote} \setminus \{\text{signature}\}))$$
 
@@ -162,6 +173,8 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 
 ```json
 {
+  "protocol_version": 1,
+  "chain_id": "minivoting-testnet-1",
   "height": 1,
   "view": 0,
   "block_hash": "a5c7f8...64_hex_chars...",
@@ -177,64 +190,100 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 
 ## 6. Cơ chế Bền vững và Khóa (Durable Locks & Persist-Before-Send)
 
-### 6.1 Nguyên tắc Persist-Before-Send
+### 6.1 Nguyên tắc Persist-Before-Send (Tiêu chí T22, T29)
 1. Mọi validator tuyệt đối **không được phát thông điệp mạng trước khi hoàn tất ghi đĩa (SQLite)**.
-2. Trình tự bắt buộc:
-   $$\text{Tạo Vote} \longrightarrow \text{Ghi SQLite thành công} \longrightarrow \text{Gọi HTTP Transport Broadcast}$$
-3. **Mục đích:** Nếu tiến trình bị sập nguồn (Crash) ngay sau khi gửi hoặc trong khi gửi, khi khởi động lại, node đọc dữ liệu từ SQLite và biết chính xác mình đã bỏ phiếu cho giá trị nào, ngăn chặn hoàn toàn việc vô tình ký giá trị thứ hai.
+2. Trình tự bắt buộc tại pha PREPARE:
+   $$\text{Tạo Vote} \longrightarrow \text{Ghi Lock + Vote vào SQLite} \longrightarrow \text{Broadcast HTTP}$$
+3. **Phục hồi sau Crash (Restart Recovery):**
+   - Khi node khởi động lại, CSM đọc bảng `consensus_locks` và `consensus_votes` tại `target_height`.
+   - Nếu đã tồn tại lock cho `target_height`, node nạp lại `locked_block_hash` vào bộ nhớ và chỉ gửi lại (*retransmit*) phiếu bầu cũ, kiên quyết từ chối ký bất kỳ đề xuất nào khác (ngăn chặn double-signing ngoài ý muốn).
 
 ### 6.2 Khóa bền vững (Durable Lock)
-- Khi một node phát `PREPARE` hoặc đạt `PreparedCertificate` cho khối $B$ ở `height` $h$, biến khóa `locked_block_hash = B` được lưu bền vững vào bảng trạng thái.
-- Node sẽ kiên quyết từ chối mọi khối khác $B' \ne B$ tại `height` $h$, bất kể nhận được bao nhiêu yêu cầu.
+- Khóa được xác lập ngay tại thời điểm node đồng ý phát phiếu `PREPARE` cho `block_hash`.
+- Khóa chỉ được mở/xóa khi:
+  1. Khối tại `target_height` được commit thành công vào sổ cái.
+  2. Hoặc node thực hiện đồng bộ (*sync*) từ một peer đã có `peer_committed_height >= target_height` kèm `CommitCertificate` hợp lệ.
 
 ---
 
-## 7. Chính sách Timeout và Retry (Consensus Timeout & Retry Policy)
+## 7. Chính sách Timeout, Retry và Buffer (Timeout, Retry & Early Buffering)
 
 ### 7.1 Ba bộ đếm thời gian (Timers)
 
 | Bộ đếm (Timer) | Thời gian mặc định | Ngữ cảnh kích hoạt | Hành động khi hết hạn (On Timeout) |
 |---|---|---|---|
-| `PROPOSAL_TIMEOUT` | 5.0 giây | Chờ Leader gửi `PROPOSE` khi bắt đầu height mới | Cảnh báo `LEADER_UNAVAILABLE`. Không tự tạo block. Chờ tiếp |
+| `PROPOSAL_TIMEOUT` | 5.0 giây | Chờ Leader gửi `PROPOSE` khi bắt đầu `target_height` | Cảnh báo `LEADER_UNAVAILABLE`. Gửi yêu cầu kéo proposal từ Leader. Chờ tiếp |
 | `PREPARE_TIMEOUT` | 2.0 giây | Đã gửi PREPARE nhưng chưa gom đủ 3 phiếu PREPARE | Kích hoạt Retry: Broadcast lại chính phiếu `PREPARE` cũ |
 | `COMMIT_TIMEOUT` | 2.0 giây | Đã gửi COMMIT nhưng chưa gom đủ 3 phiếu COMMIT | Kích hoạt Retry: Broadcast lại chính phiếu `COMMIT` cũ |
 
-### 7.2 Quy tắc Bất biến khi Retry (Retry Invariant)
-1. **Chỉ phát lại bản ghi cũ (Retransmission Only):**
-   Khi kích hoạt retry, validator đọc lại bản ghi vote đã lưu trong SQLite và phát lại nguyên vẹn thông điệp cũ. Tuyệt đối không sinh lại chữ ký mới, không thay đổi trường dữ liệu.
-2. **Tính lũy đẳng (Idempotency):**
-   Phía node nhận: Nếu nhận nhiều thông điệp trùng lặp từ một `sender_id` (do retry hoặc mạng lặp), node chỉ lưu 1 phiếu duy nhất vào `VoteSet`. Bộ đếm Quorum tuyệt đối không được tăng lặp.
+### 7.2 Lấy lại Proposal và Xử lý Phiếu Đến Sớm (Early Vote Buffering - Tiêu chí T15)
+1. **Lấy lại Proposal bị mất:**
+   - Nếu Follower nhận được phiếu `PREPARE` hoặc `COMMIT` cho `target_height` nhưng bản thân chưa nhận được `PROPOSE` (do trễ mạng hoặc gói tin mất):
+   - Follower chủ động gửi request `GET /consensus/proposal?height=target_height` tới Leader (hoặc peers).
+   - Leader đọc đề xuất đã lưu trong SQLite (`Persist-Before-Send`) và phát lại nguyên vẹn cho Follower.
+2. **Hàng đợi đệm phiếu đến sớm (Early Votes Buffer):**
+   - Gói tin mạng có thể bị đảo thứ tự: Phiếu `COMMIT` đến trước `PREPARE`, hoặc phiếu bầu đến trước khi nhận được `PROPOSE`.
+   - Node duy trì một bộ đệm có giới hạn (`early_votes_buffer`, tối đa 50 phần tử để chống tràn bộ nhớ theo tiêu chí T30).
+   - Khi khối proposal tương ứng được tiếp nhận và thẩm định thành công, node tự động xả (*flush*) các phiếu trong buffer ra để kiểm tra Quorum.
 
-### 7.3 "Bốn KHÔNG" của Timeout (Safety Anti-patterns)
+### 7.3 Quy tắc Bất biến khi Retry (Retry Invariant)
+1. **Chỉ phát lại bản ghi cũ (Retransmission Only):**
+   Validator chỉ đọc lại bản ghi vote đã lưu trong SQLite và phát lại nguyên vẹn thông điệp cũ. Tuyệt đối không sinh lại chữ ký mới, không thay đổi trường dữ liệu.
+2. **Tính lũy đẳng (Idempotency):**
+   Phía node nhận: Nếu nhận nhiều thông điệp trùng lặp từ một `sender_id`, node chỉ lưu 1 phiếu duy nhất vào `VoteSet`. Bộ đếm Quorum tuyệt đối không được tăng lặp.
+
+### 7.4 "Bốn KHÔNG" của Timeout (Safety Anti-patterns)
 Khi xảy ra timeout, hệ thống tuyệt đối cấm các hành vi sau:
 1. **KHÔNG HẠ QUORUM:** Không bao giờ hạ ngưỡng từ 3 xuống 2.
 2. **KHÔNG TỰ Ý CHỐT BLOCK:** Không chốt khi chưa đủ 3 chữ ký COMMIT hợp lệ.
 3. **KHÔNG XÓA DURABLE LOCK:** Không xóa khóa để đổi sang ký block khác ở cùng height.
 4. **KHÔNG TỰ Ý ĐỔI LEADER:** Bản lõi không tự chuyển quyền Proposer sang node khác.
 
-### 7.4 Kịch bản Dừng An toàn (Graceful Stall)
+### 7.5 Đường Phục hồi Khỏi STALLED (Stalled Recovery Path)
 Nếu sau $K = 5$ lần Retry liên tiếp mà vẫn không đạt đủ Quorum:
-- Node chuyển trạng thái sang **`STALLED`**.
-- Hệ thống ngừng tiến trình xử lý, giữ nguyên trạng thái sổ cái hiện có và hiển thị cảnh báo lên giao diện quan sát.
+- Node chuyển sang trạng thái **`STALLED`**.
+- Tại trạng thái `STALLED`, node **dừng phát retry chủ động** (tránh nghẽn mạng), nhưng **vẫn duy trì chế độ lắng nghe thụ động (Passive Listener)**:
+  - Nếu mạng phục hồi và các phiếu còn thiếu được gửi tới đạt đủ Quorum $\ge 3$ cho khối đã khóa $\Rightarrow$ Node tiếp tục tiến trình chuyển sang pha tiếp theo hoặc chốt khối.
+  - Nếu một peer khác đã chốt khối và gửi `CommitCertificate` hợp lệ $\Rightarrow$ Node xác thực certificate và chốt khối, thoát khỏi `STALLED`.
+  - Nếu mạng phân vùng phục hồi và phát hiện `peer_committed_height > local_committed_height` $\Rightarrow$ Node chuyển sang trạng thái `SYNCING`.
+  - Toàn bộ quá trình phục hồi phải giữ nguyên vẹn `locked_block_hash` và điều kiện Quorum $q=3$.
 
 ---
 
-## 8. Ma trận Phân tích Kịch bản Lỗi (Fault Scenarios Analysis)
+## 8. Cơ chế Bắt Equivocation Độc lập với Thứ tự Nhận Phiếu (Tiêu chí T17)
 
-| Kịch bản | Hiện tượng | Kết quả của Giao thức | Đảm bảo Safety? | Đảm bảo Liveness? |
-|---|---|---|:---:|:---:|
-| **4 node bình thường** | Mạng thông suốt, không có lỗi | Chốt block tuần tự, $4/4$ phiếu | ĐẠT | ĐẠT |
-| **1 Follower sập (Crash)** | 3 node còn lại online | 3 node gom đủ $3/4$ phiếu $\Rightarrow$ Tiếp tục chốt | ĐẠT | ĐẠT |
-| **1 Follower gửi phiếu giả** | Chữ ký sai hoặc nội dung sai | 3 node trung thực loại bỏ phiếu rác $\Rightarrow$ Vẫn đủ $3/4$ phiếu | ĐẠT | ĐẠT |
-| **Leader sập (Crash)** | Không có `PROPOSE` được phát | Timeout `PROPOSAL_TIMEOUT` kích hoạt $\Rightarrow$ Hệ thống dừng (`STALLED`) | ĐẠT | KHÔNG |
-| **Leader Equivocation** | Leader gửi Block A cho Node 1,2; gửi Block B cho Node 3,4 | Mỗi block chỉ nhận được tối đa 2 phiếu PREPARE ($< 3$) $\Rightarrow$ Chia phiếu (Split-vote), dừng an toàn | ĐẠT | KHÔNG |
-| **Phân vùng mạng 2 - 2** | Nhóm 1 {node1, node2}, Nhóm 2 {node3, node4} | Cả 2 nhóm đều tối đa 2 phiếu ($< 3$) $\Rightarrow$ Không bên nào chốt, chờ nối mạng | ĐẠT | KHÔNG |
-| **Phân vùng mạng 3 - 1** | Nhóm 3 node chứa Leader; 1 follower bị cô lập | Nhóm 3 node đạt Quorum $3/4$ và tiếp tục; node cô lập sẽ sync lại sau | ĐẠT | ĐẠT |
-| **Node khởi động lại (Restart)** | Node bị sập nguồn khi đang bỏ phiếu | Đọc lại SQLite, phục hồi Lock, không ký sai giá trị | ĐẠT | ĐẠT |
+Để ngăn chặn validator Byzantine lách luật bằng cách đảo thứ tự gửi phiếu:
+- Hệ thống duy trì một bảng chứng cứ phiếu đã quan sát:
+  $$\text{seen\_votes}[\langle \text{target\_height}, \text{phase} \rangle][\text{sender\_id}] = \text{vote}$$
+- Khi một phiếu $V$ gửi từ `sender_id` tới:
+  1. Nếu `sender_id` chưa có trong `seen_votes`: Lưu `seen_votes[sender_id] = V`.
+  2. Nếu `sender_id` đã có trong `seen_votes`:
+     - Nếu $V.\text{block\_hash} == \text{seen\_votes}[sender\_id].\text{block\_hash}$: Phiếu gửi lại trùng lặp (Idempotent), bỏ qua.
+     - Nếu $V.\text{block\_hash} \ne \text{seen\_votes}[sender\_id].\text{block\_hash}$: **PHÁT HIỆN EQUIVOCATION!**
+       - Node lưu trữ cả hai phiếu $V_1, V_2$ làm bằng chứng Byzantine không thể chối cãi.
+       - Ghi log cảnh báo vi phạm an toàn nghiêm trọng.
+       - Phiếu vi phạm không được thêm vào tập tính Quorum.
+- **Tính độc lập thứ tự:** Bất kể validator gửi phiếu ủng hộ Block $A$ trước rồi Block $B$ sau, hay gửi $B$ trước $A$ sau, hệ thống đều phát hiện ra sự mâu thuẫn ngay khi nhận được phiếu thứ hai.
 
 ---
 
-## 9. Tiêu chuẩn Nghiệm thu & Kế hoạch Tích hợp (DoD & Interfaces)
+## 9. Ma trận Phân tích Kịch bản Lỗi (Fault Scenarios Analysis)
+
+| Kịch bản | Tiêu chí | Hiện tượng | Kết quả của Giao thức | Đảm bảo Safety? | Đảm bảo Liveness? |
+|---|:---:|---|---|:---:|:---:|
+| **4 node bình thường** | Baseline | Mạng thông suốt, không có lỗi | Chốt block tuần tự, $4/4$ phiếu | ĐẠT | ĐẠT |
+| **1 Follower sập (Crash)** | T18 | 3 node còn lại online | 3 node gom đủ $3/4$ phiếu $\Rightarrow$ Tiếp tục chốt | ĐẠT | ĐẠT |
+| **1 Follower gửi phiếu sai Context** | T14 | Trộn height/chain/phase hoặc view != 0 | Bị loại bỏ ngay trước khi tính Quorum | ĐẠT | ĐẠT |
+| **Phiếu tới trễ / đảo thứ tự** | T15 | Phiếu đến trước proposal hoặc COMMIT trước PREPARE | Lưu vào early buffer, kéo proposal thiếu | ĐẠT | ĐẠT |
+| **Leader Equivocation** | T16 | Leader gửi 2 block cạnh tranh | Chia phiếu (Split-vote), không block nào đủ 3 phiếu $\Rightarrow$ Dừng an toàn (`STALLED`) | ĐẠT | KHÔNG |
+| **Byzantine Double-Signing** | T17 | Follower gửi 2 phiếu khác hash (thứ tự A→B hoặc B→A) | Phát hiện Equivocation độc lập thứ tự, lưu chứng cứ | ĐẠT | ĐẠT |
+| **Restart khi đang bỏ phiếu** | T22, T29 | Sập nguồn sau khi gửi hoặc 2 request đồng thời | Khôi phục Lock và Own Vote từ SQLite, không ký giá trị khác | ĐẠT | ĐẠT |
+| **Phân vùng mạng 2 - 2** | E4 | Nhóm 1 {node1, node2}, Nhóm 2 {node3, node4} | Cả 2 nhóm đều tối đa 2 phiếu ($< 3$) $\Rightarrow$ Dừng an toàn | ĐẠT | KHÔNG |
+| **Phân vùng mạng 3 - 1** | E4 | Nhóm 3 node chứa Leader; 1 follower bị cô lập | Nhóm 3 node đạt Quorum $3/4$ và tiếp tục; node cô lập sync sau | ĐẠT | ĐẠT |
+
+---
+
+## 10. Tiêu chuẩn Nghiệm thu & Kế hoạch Tích hợp (DoD & Interfaces)
 
 ### Phối hợp với TV1 (Core Module):
 - Thống nhất hàm băm chuẩn hóa: `canonical_bytes()`.
@@ -245,8 +294,9 @@ Nếu sau $K = 5$ lần Retry liên tiếp mà vẫn không đạt đủ Quorum:
 - TV3 cài đặt bảng SQLite:
   - `consensus_votes(height, phase, block_hash, signature, created_at)`
   - `consensus_locks(height, locked_block_hash)`
-- TV3 đảm bảo giao diện HTTPX Transport thực hiện `retry` có backoff và không giữ Database lock khi đang đợi HTTP.
+- TV3 đảm bảo quy tắc `Persist-Before-Send`: ghi khóa và phiếu bầu vào SQLite trong cùng transaction trước khi gọi hàm broadcast của HTTP transport.
+- Cài đặt endpoint `GET /consensus/proposal?height={height}` để phục vụ lấy lại proposal bị thiếu.
 
 ### Phối hợp với TV4 (Frontend & Monitoring):
-- TV2 cung cấp trạng thái hiện tại qua API: `current_phase`, `current_height`, `votes_received`, `is_locked`, `is_stalled`.
+- TV2 cung cấp trạng thái hiện tại qua API: `committed_height`, `target_height`, `current_phase`, `votes_received`, `is_locked`, `is_stalled`.
 - TV4 dùng dữ liệu này để hiển thị Timeline bỏ phiếu trực quan theo thời gian thực.

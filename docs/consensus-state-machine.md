@@ -4,8 +4,8 @@
 - **Người phụ trách:** TV2 · Nguyễn Minh Đức (@DucNguyen)
 - **Người thẩm định (Reviewers):** TV1 (Core), TV3 (Network/Storage), TV4 (Frontend/Evaluation)
 - **Tài liệu nền tảng:** [docs/protocol.md](protocol.md)
-- **Phiên bản:** 1.0 (Draft Tuần 1)
-- **Tình trạng:** Chờ review nội bộ nhóm
+- **Phiên bản:** 1.1 (Cập nhật theo Review TV4/Trưởng nhóm)
+- **Tình trạng:** Đã hoàn thiện các điểm phản biện kỹ thuật W1
 
 ---
 
@@ -13,48 +13,52 @@
 
 Trong mỗi validator node, **Consensus State Machine (CSM)** là thành phần điều phối vòng đời đồng thuận tại từng khối (`height`). CSM nhận các sự kiện đầu vào (thông điệp từ mạng, tín hiệu hết hạn bộ đếm thời gian, kết quả thẩm định từ module Core), kiểm tra các điều kiện an toàn (Guards) và thực hiện chuyển dịch trạng thái (Transitions) một cách tất định.
 
-### Bất biến thiết kế (Design Invariant)
+### Bất biến thiết kế (Design Invariants)
 1. **Tính tất định (Determinism):** Với cùng một chuỗi sự kiện và dữ liệu đầu vào, CSM tại các node trung thực phải chuyển dịch qua các trạng thái tương đương.
-2. **Nguyên tắc bền vững trước khi chuyển trạng thái:** Các biến trạng thái cốt lõi (Khóa, phiếu bầu, certificate) phải được lưu xuống SQLite trước khi trạng thái bộ nhớ chuyển dịch và trước khi broadcast thông điệp ra mạng (*Persist-Before-Send*).
+2. **Quy tắc Persist-Before-Send bắt buộc (Tiêu chí T22, T29):**
+   - Khóa bền vững (`consensus_locks`) và Phiếu bầu của chính mình (`consensus_votes`) phải được ghi nguyên tử vào SQLite **TRƯỚC KHI** broadcast thông điệp `PREPARE` ra mạng.
+   - Khi khởi động lại (Restart), CSM nạp lại cả khóa và phiếu bầu cũ để kiên quyết từ chối ký đề xuất khác.
+3. **Phân định rõ ràng Chiều cao Khối:**
+   - `committed_height`: Đỉnh chuỗi đã chốt trong cơ sở dữ liệu SQLite cục bộ.
+   - `target_height = committed_height + 1`: Chiều cao khối đang xử lý đồng thuận.
 
 ---
 
 ## 2. Định nghĩa các Trạng thái (State Definitions)
 
-Tại một block `height` nhất định, CSM của một Validator trải qua các trạng thái sau:
+Tại một vòng đồng thuận cho `target_height`, CSM của một Validator trải qua các trạng thái sau:
 
 | Mã Trạng thái | Tên Trạng thái | Ý nghĩa và Hành vi |
 |---|---|---|
-| `S0` | `INITIALIZING` | Khởi động, đọc Genesis, nạp public keys, mở database SQLite, phục hồi trạng thái height và lock trước đó |
-| `S1` | `WAIT_PROPOSAL` | Đã sẵn sàng ở `height = H`, khởi động `PROPOSAL_TIMEOUT`, chờ nhận thông điệp `PROPOSE` từ Leader |
+| `S0` | `INITIALIZING` | Khởi động, đọc Genesis, nạp public keys, mở database SQLite, đọc `committed_height = max_height_db`, đặt `target_height = committed_height + 1`. Nạp lại `locked_block_hash` nếu có từ trước |
+| `S1` | `WAIT_PROPOSAL` | Sẵn sàng cho `target_height`, khởi động `PROPOSAL_TIMEOUT`, chờ nhận `PROPOSE` từ Leader hoặc xử lý phiếu trong buffer |
 | `S2` | `VALIDATING_PROPOSAL` | Nhận được khối từ Leader, tạm dừng timer, chuyển giao khối cho module Core để kiểm tra tính hợp lệ |
-| `S3` | `PREPARING` | Khối hợp lệ; node đã lưu và phát phiếu `PREPARE`; khởi động `PREPARE_TIMEOUT`; đang gom phiếu `PREPARE` |
-| `S4` | `PREPARED` | Đã thu thập đủ $\ge 3$ phiếu `PREPARE` hợp lệ $\Rightarrow$ Tạo `PreparedCertificate`, thiết lập **Durable Lock** vào `block_hash` này |
-| `S5` | `COMMITTING` | Node đã lưu và phát phiếu `COMMIT`; khởi động `COMMIT_TIMEOUT`; đang gom phiếu `COMMIT` |
-| `S6` | `DECIDED` (COMMITTED) | Đã thu thập đủ $\ge 3$ phiếu `COMMIT` hợp lệ $\Rightarrow$ Tạo `CommitCertificate`. Thực hiện commit nguyên tử vào SQLite, tăng height $H \leftarrow H+1$ |
-| `E1` | `LEADER_UNAVAILABLE` | Hết `PROPOSAL_TIMEOUT` mà không nhận được đề xuất hợp lệ từ Leader. Node chờ đợi và cảnh báo |
-| `E2` | `STALLED` | Hết số lần Retry tối đa ($K=5$) ở pha PREPARE hoặc COMMIT mà không đạt Quorum. Dừng an toàn để bảo vệ tính nhất quán |
-| `R0` | `SYNCING` | Node nhận thấy peer khác có `height > current_height`, tạm dừng consensus để đồng bộ khối và certificate thiếu |
+| `S3` | `PREPARING` | Khối hợp lệ; **đã lưu nguyên tử Lock + Own PREPARE vào SQLite** và phát `PREPARE`; bật `PREPARE_TIMEOUT`; đang gom phiếu `PREPARE` |
+| `S4` | `PREPARED` | Đã thu thập đủ $\ge 3$ phiếu `PREPARE` hợp lệ $\Rightarrow$ Tạo `PreparedCertificate` |
+| `S5` | `COMMITTING` | Đã lưu Own COMMIT vào SQLite và phát `COMMIT`; bật `COMMIT_TIMEOUT`; đang gom phiếu `COMMIT` |
+| `S6` | `DECIDED` (COMMITTED) | Đã thu thập đủ $\ge 3$ phiếu `COMMIT` hợp lệ $\Rightarrow$ Tạo `CommitCertificate`. Thực hiện commit nguyên tử vào SQLite, cập nhật `committed_height = target_height`, xóa lock cũ, tăng `target_height` |
+| `E1` | `LEADER_UNAVAILABLE` | Hết `PROPOSAL_TIMEOUT` mà không nhận được đề xuất hợp lệ. Node gửi yêu cầu kéo proposal từ Leader/Peers và tiếp tục chờ |
+| `E2` | `STALLED` | Hết số lần Retry ($K=5$) ở pha PREPARE hoặc COMMIT mà chưa đủ Quorum. Dừng phát chủ động, duy trì lắng nghe thụ động (Passive Listener) |
+| `R0` | `SYNCING` | Phát hiện `peer_committed_height > local_committed_height`. Tạm dừng consensus để đồng bộ khối và certificate thiếu từ peer |
 
 ---
 
 ## 3. Danh mục Sự kiện Đầu vào (Input Events)
 
-Các sự kiện có thể kích hoạt chuyển dịch trạng thái trong CSM:
-
-- `EVT_INIT_DONE`: Quá trình khởi tạo và phục hồi dữ liệu hoàn tất.
-- `EVT_RCV_PROPOSE(block, sig)`: Nhận gói tin `PROPOSE` từ mạng.
-- `EVT_VALIDATION_OK`: Module Core xác nhận dữ liệu khối, chữ ký giao dịch, `prev_hash` và `state_hash` hoàn toàn chính xác.
+- `EVT_INIT_DONE`: Khởi tạo và đọc database hoàn tất.
+- `EVT_RCV_PROPOSE(block, sig)`: Nhận thông điệp `PROPOSE` từ mạng.
+- `EVT_VALIDATION_OK`: Module Core xác nhận dữ liệu khối, chữ ký giao dịch, `prev_hash == tip_hash` và `state_hash` hoàn toàn chính xác.
 - `EVT_VALIDATION_FAIL(reason)`: Khối đề xuất không hợp lệ (sai chữ ký, sai số dư, sai hash).
 - `EVT_RCV_PREPARE(vote)`: Nhận một phiếu bầu `PREPARE` từ một peer.
-- `EVT_PREPARE_QUORUM(prepared_cert)`: Bộ gom phiếu `PrepareVoteSet` đạt đủ 3 phiếu hợp lệ từ 3 validator khác nhau.
+- `EVT_PREPARE_QUORUM(prepared_cert)`: Bộ gom phiếu `PrepareVoteSet` đạt đủ 3 phiếu hợp lệ khớp toàn bộ Context.
 - `EVT_RCV_COMMIT(vote)`: Nhận một phiếu bầu `COMMIT` từ một peer.
-- `EVT_COMMIT_QUORUM(commit_cert)`: Bộ gom phiếu `CommitVoteSet` đạt đủ 3 phiếu hợp lệ từ 3 validator khác nhau.
+- `EVT_COMMIT_QUORUM(commit_cert)`: Bộ gom phiếu `CommitVoteSet` đạt đủ 3 phiếu hợp lệ khớp toàn bộ Context.
 - `EVT_TIMEOUT_PROPOSAL`: Hết hạn bộ đếm `PROPOSAL_TIMEOUT` (5.0s).
 - `EVT_TIMEOUT_PREPARE`: Hết hạn bộ đếm `PREPARE_TIMEOUT` (2.0s).
 - `EVT_TIMEOUT_COMMIT`: Hết hạn bộ đếm `COMMIT_TIMEOUT` (2.0s).
-- `EVT_RETRY_EXCEEDED`: Số lần thử lại (retry count) vượt quá ngưỡng $K=5$.
-- `EVT_PEER_AHEAD(peer_height)`: Phát hiện mạng đã tiến tới height cao hơn.
+- `EVT_RETRY_EXCEEDED`: Số lần thử lại vượt quá ngưỡng $K=5$.
+- `EVT_PEER_AHEAD(peer_committed_height)`: Phát hiện peer có `peer_committed_height > local_committed_height`.
+- `EVT_RESUME_QUORUM`: Nhận đủ phiếu hợp lệ hoặc nhận `CommitCertificate` hợp lệ khi đang ở trạng thái `STALLED`.
 
 ---
 
@@ -62,24 +66,26 @@ Các sự kiện có thể kích hoạt chuyển dịch trạng thái trong CSM:
 
 | Trạng thái hiện tại | Sự kiện kích hoạt | Điều kiện kiểm tra (Guard) | Hành động thực thi (Action) | Trạng thái tiếp theo |
 |---|---|---|---|---|
-| `INITIALIZING` | `EVT_INIT_DONE` | Database mở thành công, Genesis hợp lệ | Đặt `current_height = max_height_db + 1`; Chuyển sang chờ proposal | `WAIT_PROPOSAL` |
-| `WAIT_PROPOSAL` | `EVT_RCV_PROPOSE` | Sender là `node1`, `height == current_height`, chưa bị khóa giá trị khác | Hủy `PROPOSAL_TIMEOUT`; Đưa khối vào hàng đợi thẩm định | `VALIDATING_PROPOSAL` |
-| `WAIT_PROPOSAL` | `EVT_TIMEOUT_PROPOSAL` | Chưa nhận được proposal nào | Ghi log cảnh báo `LEADER_UNAVAILABLE`; Reset timer chờ tiếp | `LEADER_UNAVAILABLE` |
-| `LEADER_UNAVAILABLE`| `EVT_RCV_PROPOSE` | Nhận được proposal hợp lệ từ Leader | Hủy timer; Bắt đầu thẩm định | `VALIDATING_PROPOSAL` |
-| `VALIDATING_PROPOSAL`| `EVT_VALIDATION_OK` | Khối hợp lệ, không xung đột Lock | 1. Ký vote `PREPARE`<br>2. Lưu vote vào SQLite<br>3. Broadcast `PREPARE`<br>4. Thêm vote của mình vào `PrepareVoteSet`<br>5. Bật `PREPARE_TIMEOUT` | `PREPARING` |
+| `INITIALIZING` | `EVT_INIT_DONE` | Database mở thành công, Genesis hợp lệ | Đọc `committed_height`; đặt `target_height = committed_height + 1`; đọc `locked_block_hash` từ SQLite nếu có | `WAIT_PROPOSAL` |
+| `WAIT_PROPOSAL` | `EVT_RCV_PROPOSE` | Sender là `node1`, `block.height == target_height`, `block.prev_hash == tip_hash`, chưa bị khóa giá trị khác | Hủy `PROPOSAL_TIMEOUT`; Đưa khối vào hàng đợi thẩm định | `VALIDATING_PROPOSAL` |
+| `WAIT_PROPOSAL` | `EVT_RCV_PREPARE` hoặc `EVT_RCV_COMMIT` | `vote.height == target_height` nhưng chưa có Proposal | Lưu vào `early_votes_buffer` (tối đa 50); Gửi request `GET /consensus/proposal?height=target_height` tới Leader/Peers (Tiêu chí T15) | `WAIT_PROPOSAL` |
+| `WAIT_PROPOSAL` | `EVT_TIMEOUT_PROPOSAL` | Chưa nhận được proposal nào | Gửi request đòi proposal từ Leader; ghi log cảnh báo `LEADER_UNAVAILABLE`; Reset timer | `LEADER_UNAVAILABLE` |
+| `LEADER_UNAVAILABLE`| `EVT_RCV_PROPOSE` | Nhận được proposal hợp lệ từ Leader | Hủy timer; Bắt đầu thẩm định khối | `VALIDATING_PROPOSAL` |
+| `VALIDATING_PROPOSAL`| `EVT_VALIDATION_OK` | Khối hợp lệ, không xung đột Lock | **Persist-Before-Send bắt buộc (T22, T29):**<br>1. Lưu nguyên tử vào SQLite: `consensus_locks` (khóa `block_hash`) và `consensus_votes` (phiếu PREPARE)<br>2. Cập nhật `locked_block_hash = block_hash`<br>3. Khởi tạo `PrepareVoteSet` và `CommitVoteSet` cho `block_hash`<br>4. Broadcast `PREPARE`<br>5. Đưa own vote vào `PrepareVoteSet`<br>6. Xả `early_votes_buffer` cho pha PREPARE<br>7. Bật `PREPARE_TIMEOUT` | `PREPARING` |
 | `VALIDATING_PROPOSAL`| `EVT_VALIDATION_FAIL` | Phát hiện lỗi nghiệp vụ / chữ ký giả | Ghi log vi phạm `REJECT`; Quay lại chờ đề xuất khác hoặc timeout | `WAIT_PROPOSAL` |
-| `PREPARING` | `EVT_RCV_PREPARE` | Chữ ký hợp lệ, đúng height, `sender_id` là validator được cấp quyền | Thêm vote vào `PrepareVoteSet` (kiểm tra chống trùng lặp / chống equivocation) | `PREPARING` |
-| `PREPARING` | `EVT_PREPARE_QUORUM` | `len(PrepareVoteSet) >= 3` | 1. Gom 3 chữ ký tạo `PreparedCertificate`<br>2. Lưu `locked_block_hash` vào SQLite<br>3. Hủy `PREPARE_TIMEOUT` | `PREPARED` |
+| `PREPARING` | `EVT_RCV_PREPARE` | Khớp toàn bộ Context (T14), chữ ký hợp lệ, sender hợp lệ | Gọi `add_vote(vote)`: Kiểm tra Equivocation độc lập thứ tự (T17), tích lũy Quorum | `PREPARING` |
+| `PREPARING` | `EVT_PREPARE_QUORUM` | `PrepareVoteSet.has_quorum() == True` | 1. Gom 3 chữ ký tạo `PreparedCertificate`<br>2. Hủy `PREPARE_TIMEOUT`<br>3. Xả `early_votes_buffer` cho pha COMMIT | `PREPARED` |
 | `PREPARING` | `EVT_TIMEOUT_PREPARE` | Chưa đủ 3 phiếu, `retry_count < 5` | Tăng `retry_count += 1`; Đọc vote cũ từ SQLite và broadcast lại | `PREPARING` |
-| `PREPARING` | `EVT_TIMEOUT_PREPARE` | Chưa đủ 3 phiếu, `retry_count >= 5` | Ghi log lỗi bế tắc Quorum; Phát tín hiệu hệ thống dừng | `STALLED` |
-| `PREPARED` | Tự động kích hoạt | Sở hữu `PreparedCertificate` hợp lệ | 1. Ký vote `COMMIT`<br>2. Lưu vote vào SQLite<br>3. Broadcast `COMMIT`<br>4. Thêm vote của mình vào `CommitVoteSet`<br>5. Bật `COMMIT_TIMEOUT` | `COMMITTING` |
-| `COMMITTING` | `EVT_RCV_COMMIT` | Chữ ký hợp lệ, đúng height, `sender_id` là validator | Thêm vote vào `CommitVoteSet` (chống đếm trùng) | `COMMITTING` |
-| `COMMITTING` | `EVT_COMMIT_QUORUM` | `len(CommitVoteSet) >= 3` | 1. Gom 3 chữ ký tạo `CommitCertificate`<br>2. Hủy `COMMIT_TIMEOUT` | `DECIDED` |
+| `PREPARING` | `EVT_TIMEOUT_PREPARE` | Chưa đủ 3 phiếu, `retry_count >= 5` | Dừng phát retry chủ động; Giữ nguyên lock; Chuyển sang lắng nghe thụ động | `STALLED` |
+| `PREPARED` | Tự động kích hoạt | Sở hữu `PreparedCertificate` hợp lệ | 1. Ký vote `COMMIT`<br>2. **Persist-Before-Send:** Lưu vote `COMMIT` vào SQLite<br>3. Broadcast `COMMIT`<br>4. Thêm vote của mình vào `CommitVoteSet`<br>5. Bật `COMMIT_TIMEOUT` | `COMMITTING` |
+| `COMMITTING` | `EVT_RCV_COMMIT` | Khớp toàn bộ Context (T14), chữ ký hợp lệ | Gọi `add_vote(vote)`: Kiểm tra Equivocation, tích lũy Quorum | `COMMITTING` |
+| `COMMITTING` | `EVT_COMMIT_QUORUM` | `CommitVoteSet.has_quorum() == True` | 1. Gom 3 chữ ký tạo `CommitCertificate`<br>2. Hủy `COMMIT_TIMEOUT` | `DECIDED` |
 | `COMMITTING` | `EVT_TIMEOUT_COMMIT` | Chưa đủ 3 phiếu, `retry_count < 5` | Tăng `retry_count += 1`; Đọc vote cũ từ SQLite và broadcast lại | `COMMITTING` |
-| `COMMITTING` | `EVT_TIMEOUT_COMMIT` | Chưa đủ 3 phiếu, `retry_count >= 5` | Ghi log chia phiếu / thiếu validator; Dừng an toàn | `STALLED` |
-| `DECIDED` | Hoàn tất commit | Transaction SQLite thành công | 1. Ghi Block + Certificate<br>2. Cập nhật State accounts<br>3. Dọn Mempool<br>4. Xóa Lock của height cũ<br>5. Tăng `current_height += 1` | `WAIT_PROPOSAL` |
-| *Bất kỳ trạng thái*| `EVT_PEER_AHEAD` | `peer_height > current_height` | Lưu trạng thái hiện tại, chuyển sang chế độ kéo dữ liệu chuỗi | `SYNCING` |
-| `SYNCING` | Hoàn tất đồng bộ | Đã tải và verify đủ chuỗi đến đỉnh mới | Cập nhật `current_height = tip_height + 1`; Trở lại trạng thái chờ | `WAIT_PROPOSAL` |
+| `COMMITTING` | `EVT_TIMEOUT_COMMIT` | Chưa đủ 3 phiếu, `retry_count >= 5` | Dừng phát retry chủ động; Giữ nguyên lock; Chuyển sang lắng nghe thụ động | `STALLED` |
+| `STALLED` | `EVT_RESUME_QUORUM` | Nhận đủ phiếu còn thiếu cho khối đã khóa hoặc nhận `CommitCertificate` hợp lệ | Thoát `STALLED`, khôi phục tiến trình bình thường với giá trị đã khóa | `COMMITTING` hoặc `DECIDED` |
+| `DECIDED` | Hoàn tất commit | Transaction SQLite thành công | 1. Ghi Block + Certificate vào SQLite<br>2. Cập nhật State accounts<br>3. Dọn Mempool<br>4. Xóa Lock của `target_height`<br>5. Cập nhật `committed_height = target_height`<br>6. Đặt `target_height = committed_height + 1`<br>7. Reset VoteSets và buffer | `WAIT_PROPOSAL` |
+| *Bất kỳ trạng thái*| `EVT_PEER_AHEAD` | `peer_committed_height > local_committed_height` | Lưu trạng thái hiện tại, chuyển sang chế độ kéo dữ liệu khối và certificate thiếu | `SYNCING` |
+| `SYNCING` | Hoàn tất đồng bộ | Đã tải và verify đủ chuỗi đến đỉnh mới | Cập nhật `committed_height = tip_height`; `target_height = committed_height + 1`; Trở lại chờ proposal | `WAIT_PROPOSAL` |
 
 ---
 
@@ -89,108 +95,213 @@ Các sự kiện có thể kích hoạt chuyển dịch trạng thái trong CSM:
 stateDiagram-v2
     [*] --> INITIALIZING
     
-    INITIALIZING --> WAIT_PROPOSAL: EVT_INIT_DONE
+    INITIALIZING --> WAIT_PROPOSAL: EVT_INIT_DONE\n(target_height = committed + 1)
     
     WAIT_PROPOSAL --> VALIDATING_PROPOSAL: EVT_RCV_PROPOSE
-    WAIT_PROPOSAL --> LEADER_UNAVAILABLE: EVT_TIMEOUT_PROPOSAL (5s)
+    WAIT_PROPOSAL --> LEADER_UNAVAILABLE: EVT_TIMEOUT_PROPOSAL (5s)\n(Đòi proposal từ Leader)
+    WAIT_PROPOSAL --> WAIT_PROPOSAL: Nhận vote tới sớm\n(Lưu early_buffer & đòi proposal)
     
     LEADER_UNAVAILABLE --> VALIDATING_PROPOSAL: Nhận được proposal hợp lệ
     
-    VALIDATING_PROPOSAL --> WAIT_PROPOSAL: EVT_VALIDATION_FAIL (Ghi log REJECT)
-    VALIDATING_PROPOSAL --> PREPARING: EVT_VALIDATION_OK\n(Persist & Broadcast PREPARE)
+    VALIDATING_PROPOSAL --> WAIT_PROPOSAL: EVT_VALIDATION_FAIL (REJECT)
+    VALIDATING_PROPOSAL --> PREPARING: EVT_VALIDATION_OK\n(Persist Lock + Own PREPARE -> Broadcast)
     
-    PREPARING --> PREPARING: EVT_RCV_PREPARE (Tích lũy phiếu)
+    PREPARING --> PREPARING: EVT_RCV_PREPARE (Kiểm tra Context & Equivocation)
     PREPARING --> PREPARING: EVT_TIMEOUT_PREPARE & retry < 5 (Retransmit cũ)
-    PREPARING --> STALLED: EVT_TIMEOUT_PREPARE & retry >= 5
-    PREPARING --> PREPARED: EVT_PREPARE_QUORUM (Đủ 3 PREPARE -> Khóa block)
+    PREPARING --> STALLED: EVT_TIMEOUT_PREPARE & retry >= 5\n(Lắng nghe thụ động)
+    PREPARING --> PREPARED: EVT_PREPARE_QUORUM (Đủ 3 PREPARE hợp lệ)
     
-    PREPARED --> COMMITTING: Tự động (Persist & Broadcast COMMIT)
+    STALLED --> PREPARING: EVT_RESUME_QUORUM (Nhận đủ phiếu PREPARE đến muộn)
+    STALLED --> DECIDED: EVT_RESUME_QUORUM (Nhận được CommitCertificate từ peer)
     
-    COMMITTING --> COMMITTING: EVT_RCV_COMMIT (Tích lũy phiếu)
+    PREPARED --> COMMITTING: Tự động (Persist Own COMMIT -> Broadcast)
+    
+    COMMITTING --> COMMITTING: EVT_RCV_COMMIT (Kiểm tra Context & Equivocation)
     COMMITTING --> COMMITTING: EVT_TIMEOUT_COMMIT & retry < 5 (Retransmit cũ)
-    COMMITTING --> STALLED: EVT_TIMEOUT_COMMIT & retry >= 5
-    COMMITTING --> DECIDED: EVT_COMMIT_QUORUM (Đủ 3 COMMIT)
+    COMMITTING --> STALLED: EVT_TIMEOUT_COMMIT & retry >= 5\n(Lắng nghe thụ động)
+    COMMITTING --> DECIDED: EVT_COMMIT_QUORUM (Đủ 3 COMMIT hợp lệ)
     
-    DECIDED --> WAIT_PROPOSAL: Commit DB nguyên tử thành công\n(Tăng height H + 1)
+    DECIDED --> WAIT_PROPOSAL: Commit SQLite nguyên tử thành công\n(committed_height++, target_height++)
     
-    WAIT_PROPOSAL --> SYNCING: EVT_PEER_AHEAD
-    PREPARING --> SYNCING: EVT_PEER_AHEAD
-    COMMITTING --> SYNCING: EVT_PEER_AHEAD
+    WAIT_PROPOSAL --> SYNCING: peer_committed > local_committed
+    PREPARING --> SYNCING: peer_committed > local_committed
+    COMMITTING --> SYNCING: peer_committed > local_committed
+    STALLED --> SYNCING: peer_committed > local_committed
     SYNCING --> WAIT_PROPOSAL: Hoàn tất kéo khối & verify
 ```
 
 ---
 
-## 6. Cơ chế Quản lý Bộ sưu tập Phiếu (VoteSet Mechanics) & Chống Gian lận
+## 6. Thuật toán VoteSet và Bắt Equivocation Độc lập Thứ tự (Tiêu chí T14, T17)
 
-Để đảm bảo an toàn tuyệt đối khi thu thập phiếu từ mạng, lớp `VoteSet` tại mỗi pha (`PrepareVoteSet`, `CommitVoteSet`) phải tuân thủ các quy tắc xử lý sau:
+Để đảm bảo an toàn tuyệt đối khi thu thập phiếu từ mạng, lớp `VoteSet` tại mỗi pha (`PrepareVoteSet`, `CommitVoteSet`) phải được khởi tạo với Context kỳ vọng và hash mục tiêu, đồng thời tách biệt giữa **Tập phiếu tính Quorum** và **Bảng chứng cứ phiếu đã quan sát**:
 
 ### 6.1 Cấu trúc Lưu trữ trong Bộ nhớ (Memory Structure)
 ```python
 class VoteSet:
-    def __init__(self, target_height: int, target_phase: str, expected_block_hash: str):
+    def __init__(
+        self,
+        protocol_version: int,
+        chain_id: str,
+        target_height: int,
+        target_view: int,
+        target_phase: str,
+        expected_block_hash: str,
+        authorized_validators: list[str]
+    ):
+        self.protocol_version = protocol_version
+        self.chain_id = chain_id
         self.target_height = target_height
+        self.target_view = target_view
         self.target_phase = target_phase
         self.expected_block_hash = expected_block_hash
-        # Lưu map từ validator_id sang phiếu bầu
-        self.votes: dict[str, Vote] = {}
+        self.authorized_validators = set(authorized_validators)
+        
+        # Bảng chứng cứ: sender_id -> Vote (Lưu mọi phiếu đã thấy ở context này)
+        self.seen_votes: dict[str, Vote] = {}
+        
+        # Tập phiếu hợp lệ phục vụ tính Quorum: sender_id -> Vote
+        self.quorum_votes: dict[str, Vote] = {}
 ```
 
-### 6.2 Thuật toán Thêm Phiếu và Phát hiện Equivocation (Add Vote Logic)
-Khi nhận một phiếu `vote` từ mạng:
-1. **Kiểm tra ngữ cảnh:** `vote.height == self.target_height` và `vote.phase == self.target_phase`.
-2. **Kiểm tra quyền hạn:** `vote.sender_id` phải nằm trong danh sách 4 validator của Genesis.
-3. **Kiểm tra chữ ký:** Sử dụng public key của `sender_id` để xác thực chữ ký của `vote`.
-4. **Kiểm tra trùng lặp (Deduplication):**
-   - Nếu `vote.sender_id` chưa có trong `self.votes`:
-     - Nếu `vote.block_hash == self.expected_block_hash`: Thêm `vote` vào `self.votes[sender_id]`.
-     - Nếu `vote.block_hash != self.expected_block_hash`: Đây là phiếu ủng hộ block khác. Ghi nhận phiếu phân tán, không tính vào quorum cho block hiện tại.
-   - Nếu `vote.sender_id` **đã có trong `self.votes`**:
-     - *Trường hợp A (Trùng lặp hợp lệ - Idempotency):* Nếu `vote.block_hash == existing_vote.block_hash` và chữ ký trùng khớp $\rightarrow$ Bỏ qua (không tăng bộ đếm, không báo lỗi).
-     - *Trường hợp B (Gian lận ký 2 lần - EQUIVOCATION BYZANTINE):* Nếu `vote.block_hash != existing_vote.block_hash` $\rightarrow$ **Cảnh báo Byzantine!** Validator `sender_id` đã phát hai phiếu xung đột.
-       - Hành động: Ghi log sự kiện gian lận kèm bằng chứng (cả 2 chữ ký); Giữ nguyên phiếu đầu tiên hợp lệ; Không bao giờ cho phép ghi đè.
+### 6.2 Thuật toán Thêm Phiếu Độc lập Thứ tự (Add Vote Algorithm - T14, T17)
+```python
+def add_vote(self, vote: Vote, crypto_verifier) -> bool:
+    # 1. Thẩm định toàn diện Context (Tiêu chí T14)
+    if (vote.protocol_version != self.protocol_version or
+        vote.chain_id != self.chain_id or
+        vote.height != self.target_height or
+        vote.view != self.target_view or
+        vote.phase != self.target_phase):
+        logger.warning(f"Từ chối vote sai Context: {vote}")
+        return False
 
-### 6.3 Điều kiện Đạt Quorum
-- Hàm `has_quorum()` trả về `True` khi và chỉ khi:
-  $$\text{count}(\{ v \in \text{self.votes.values()} \mid v.\text{block\_hash} == \text{self.expected\_block\_hash} \}) \ge 3$$
+    # 2. Kiểm tra danh tính validator được cấp quyền
+    if vote.sender_id not in self.authorized_validators:
+        logger.warning(f"Từ chối vote từ validator không cấp quyền: {vote.sender_id}")
+        return False
+
+    # 3. Xác thực chữ ký Ed25519 trên byte chuẩn hóa (bỏ trường signature)
+    if not crypto_verifier.verify(vote.sender_id, vote):
+        logger.warning(f"Từ chối vote có chữ ký không hợp lệ từ: {vote.sender_id}")
+        return False
+
+    # 4. Kiểm tra Equivocation độc lập với thứ tự nhận phiếu (Tiêu chí T17)
+    if vote.sender_id in self.seen_votes:
+        existing_vote = self.seen_votes[vote.sender_id]
+        if vote.block_hash == existing_vote.block_hash:
+            # Idempotent: Phiếu trùng lặp hợp lệ do retry mạng
+            return True
+        else:
+            # BYZANTINE EQUIVOCATION: Sender đã ký 2 giá trị khác nhau!
+            logger.error(
+                f"PHÁT HIỆN BYZANTINE EQUIVOCATION từ {vote.sender_id}! "
+                f"Hash 1: {existing_vote.block_hash}, Hash 2: {vote.block_hash}"
+            )
+            # Lưu bằng chứng cả hai phiếu, loại sender khỏi Quorum
+            self.quorum_votes.pop(vote.sender_id, None)
+            return False
+
+    # Ghi nhận vào bảng phiếu đã quan sát
+    self.seen_votes[vote.sender_id] = vote
+
+    # 5. Tích lũy vào Quorum nếu khớp block_hash kỳ vọng
+    if vote.block_hash == self.expected_block_hash:
+        self.quorum_votes[vote.sender_id] = vote
+        return True
+
+    return False
+
+def has_quorum(self) -> bool:
+    # Quorum đạt khi có đủ >= 3 chữ ký từ 3 validator khác nhau khớp block_hash kỳ vọng
+    return len(self.quorum_votes) >= 3
+```
 
 ---
 
 ## 7. Khung Cài đặt Tham khảo cho Tuần 2 (W2 Python Interface Skeleton)
 
-Dựa trên đặc tả này, TV2 sẽ cài đặt lớp `ConsensusEngine` trong `src/consensus/` ở Tuần 2 với khung phương thức chuẩn như sau:
+Lớp `ConsensusEngine` trong `src/consensus/` được thiết kế lại, khởi tạo `VoteSet` chính xác sau khi đã thẩm định đề xuất và biết `expected_block_hash`:
 
 ```python
+from enum import Enum
+from typing import Optional, List, Dict
+
+class ConsensusState(str, Enum):
+    INITIALIZING = "INITIALIZING"
+    WAIT_PROPOSAL = "WAIT_PROPOSAL"
+    VALIDATING_PROPOSAL = "VALIDATING_PROPOSAL"
+    PREPARING = "PREPARING"
+    PREPARED = "PREPARED"
+    COMMITTING = "COMMITTING"
+    DECIDED = "DECIDED"
+    LEADER_UNAVAILABLE = "LEADER_UNAVAILABLE"
+    STALLED = "STALLED"
+    SYNCING = "SYNCING"
+
 class ConsensusEngine:
-    def __init__(self, node_id: str, private_key: str, storage_repo, network_client):
+    def __init__(self, node_id: str, private_key: str, storage_repo, network_client, config):
         self.node_id = node_id
         self.private_key = private_key
         self.storage = storage_repo
         self.network = network_client
+        self.config = config
         
-        self.current_height = 1
-        self.state = ConsensusState.WAIT_PROPOSAL
-        self.locked_block_hash: str | None = None
+        # Chiều cao khối
+        self.committed_height = self.storage.get_max_height()
+        self.target_height = self.committed_height + 1
         
-        self.prepare_votes = VoteSet(self.current_height, "PREPARE")
-        self.commit_votes = VoteSet(self.current_height, "COMMIT")
+        self.state = ConsensusState.INITIALIZING
+        self.locked_block_hash: Optional[str] = self.storage.get_lock(self.target_height)
+        
+        # Bộ gom phiếu (Được khởi tạo lại sau khi xác định block_hash hợp lệ)
+        self.prepare_votes: Optional[VoteSet] = None
+        self.commit_votes: Optional[VoteSet] = None
+        self.early_votes_buffer: List[Vote] = []
         self.retry_count = 0
+
+    def init_round_for_proposal(self, block_hash: str) -> None:
+        """Khởi tạo VoteSet đầy đủ context sau khi block đề xuất được xác nhận hợp lệ."""
+        self.prepare_votes = VoteSet(
+            protocol_version=self.config.PROTOCOL_VERSION,
+            chain_id=self.config.CHAIN_ID,
+            target_height=self.target_height,
+            target_view=0,
+            target_phase="PREPARE",
+            expected_block_hash=block_hash,
+            authorized_validators=self.config.VALIDATORS
+        )
+        self.commit_votes = VoteSet(
+            protocol_version=self.config.PROTOCOL_VERSION,
+            chain_id=self.config.CHAIN_ID,
+            target_height=self.target_height,
+            target_view=0,
+            target_phase="COMMIT",
+            expected_block_hash=block_hash,
+            authorized_validators=self.config.VALIDATORS
+        )
 
     def on_receive_proposal(self, block: Block, proposal_sig: str) -> None:
         """Xử lý đề xuất từ Leader."""
         ...
 
     def on_receive_vote(self, vote: Vote) -> None:
-        """Xử lý phiếu PREPARE hoặc COMMIT từ peer."""
+        """Xử lý phiếu PREPARE hoặc COMMIT từ peer (có xử lý buffer và equivocation)."""
         ...
 
     def on_timeout(self, timer_type: str) -> None:
-        """Xử lý khi một bộ đếm thời gian hết hạn."""
+        """Xử lý hết hạn timer và cơ chế retry / STALLED."""
         ...
 
     def advance_height(self) -> None:
-        """Chuyển sang height tiếp theo sau khi commit thành công."""
-        ...
+        """Chuyển sang target_height tiếp theo sau khi commit thành công."""
+        self.committed_height = self.target_height
+        self.target_height = self.committed_height + 1
+        self.locked_block_hash = None
+        self.prepare_votes = None
+        self.commit_votes = None
+        self.retry_count = 0
+        self.state = ConsensusState.WAIT_PROPOSAL
 ```
 
 ---
@@ -198,5 +309,5 @@ class ConsensusEngine:
 ## 8. Kế hoạch Thẩm định (Review & Verification)
 
 - **TV1 thẩm định:** Kiểm tra tính tương thích giữa bước `VALIDATING_PROPOSAL` với hàm `execute_block()` và cách tính `state_hash` trong Core.
-- **TV3 thẩm định:** Xác nhận các điểm `Persist-Before-Send` trong State Machine khớp với các hàm ghi giao dịch SQLite trong module Storage.
-- **TV4 thẩm định:** Thống nhất các trạng thái hiển thị (`PREPARING`, `COMMITTING`, `LEADER_UNAVAILABLE`, `STALLED`) để hiển thị màu sắc và badge tương ứng trên UI Dashboard.
+- **TV3 thẩm định:** Xác nhận các điểm `Persist-Before-Send` trong State Machine khớp với các hàm ghi giao dịch SQLite trong module Storage; cài đặt endpoint kéo proposal thiếu `GET /consensus/proposal`.
+- **TV4 thẩm định:** Thống nhất các trạng thái hiển thị (`PREPARING`, `COMMITTING`, `LEADER_UNAVAILABLE`, `STALLED`, `SYNCING`) để hiển thị màu sắc và badge tương ứng trên UI Dashboard.
