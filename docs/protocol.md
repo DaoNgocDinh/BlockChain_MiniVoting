@@ -3,8 +3,8 @@
 - **Mã tài liệu:** `TV2-W1-PROTOCOL`
 - **Người phụ trách:** TV2 · Nguyễn Minh Đức (@DucNguyen)
 - **Người thẩm định (Reviewers):** TV1 (Core), TV3 (Network/Storage), TV4 (Frontend/Evaluation)
-- **Phiên bản:** 1.1 (Cập nhật theo Review TV4/Trưởng nhóm)
-- **Tình trạng:** Đã hoàn thiện các điểm phản biện kỹ thuật W1
+- **Phiên bản:** 1.2 (Cập nhật theo Review TV4 vòng 2)
+- **Tình trạng:** Đã hoàn thiện cơ chế thoát STALLED, luồng trạng thái chuẩn và lưu bằng chứng Equivocation
 
 ---
 
@@ -84,7 +84,7 @@ Mọi validator (kể cả Leader `node1`) đều phải tham gia quy trình b�
              │<────── PREPARE(block_hash) ────────────────────>│  (Pha 2: Thống nhất thứ tự)
              │   (Broadcast all-to-all, thu thập đủ 3/4 phiếu)  │
              │                                                 │
-             │   [Persist Own COMMIT trước khi gửi]            │
+             │   [Đạt PreparedCert -> Persist Own COMMIT]      │
              │<────── COMMIT(block_hash) ─────────────────────>│  (Pha 3: Cam kết chốt sổ)
              │   (Broadcast all-to-all, thu thập đủ 3/4 phiếu)  │
              │                                                 │
@@ -123,23 +123,27 @@ Mọi validator (kể cả Leader `node1`) đều phải tham gia quy trình b�
 - **Tạo Prepared Certificate:**
   - Mỗi node duy trì một bộ thu thập phiếu (`VoteSet`) cho pha PREPARE.
   - Khi thu thập đủ $\ge 3$ phiếu `PREPARE` hợp lệ, từ các validator khác nhau, khớp toàn bộ Context và có cùng `block_hash` tại `target_height` $\Rightarrow$ Tạo thành **`PreparedCertificate`**.
+  - Node chính thức bước vào trạng thái **PREPARED**.
 
 ### 4.3 Pha 3: COMMIT (Cam kết chốt vào sổ cái)
 - **Chủ thể:** **Tất cả các Validator** (chỉ thực hiện sau khi đã sở hữu `PreparedCertificate`).
 - **Quy trình xử lý tại Validator $V_i$:**
-  1. Sau khi đạt trạng thái *Prepared*, $V_i$ tạo thông điệp vote `COMMIT` cho `block_hash` đã khóa.
-  2. **Persist-Before-Send:** Ghi phiếu `COMMIT` của mình vào SQLite bảng `consensus_votes` trước khi phát mạng.
-  3. Broadcast thông điệp `COMMIT` tới toàn bộ $n=4$ node.
-- **Tạo Commit Certificate và Chốt sổ (Finalization):**
-  - Khi node thu thập đủ $\ge 3$ phiếu `COMMIT` hợp lệ, từ các validator khác nhau, khớp toàn bộ Context và cùng `block_hash` tại `target_height` $\Rightarrow$ Tạo thành **`CommitCertificate`**.
-  - **Commit nguyên tử (Atomic DB Transaction):**
-    - Ghi dữ liệu Block vào bảng `blocks`.
-    - Ghi `CommitCertificate` vào bảng `certificates`.
-    - Cập nhật số dư (balance) và nonce của các tài khoản vào bảng `accounts`.
-    - Xóa các giao dịch đã chốt khỏi mempool.
-    - Xóa `consensus_locks` của `target_height` đã hoàn tất.
-    - Cập nhật `committed_height = target_height`.
-  - Node phát sự kiện đã chốt và sẵn sàng tăng `target_height` cho vòng tiếp theo.
+  1. Khi đạt trạng thái `PREPARED`, $V_i$ bắt buộc phải ký, lưu và phát phiếu `COMMIT`:
+     - Tạo thông điệp vote `COMMIT` cho `block_hash` đã khóa.
+     - **Persist-Before-Send:** Ghi phiếu `COMMIT` của mình vào SQLite bảng `consensus_votes`.
+     - Broadcast thông điệp `COMMIT` tới toàn bộ $n=4$ node.
+     - Node chuyển sang trạng thái **COMMITTING**.
+  2. **Tạo Commit Certificate và Chốt sổ (Finalization):**
+     - Khi node thu thập đủ $\ge 3$ phiếu `COMMIT` hợp lệ, từ các validator khác nhau, khớp toàn bộ Context và cùng `block_hash` tại `target_height` $\Rightarrow$ Tạo thành **`CommitCertificate`**.
+     - Node chuyển sang trạng thái **DECIDED**.
+  3. **Commit nguyên tử (Atomic DB Transaction):**
+     - Ghi dữ liệu Block vào bảng `blocks`.
+     - Ghi `CommitCertificate` vào bảng `certificates`.
+     - Cập nhật số dư (balance) và nonce của các tài khoản vào bảng `accounts`.
+     - Xóa các giao dịch đã chốt khỏi mempool.
+     - Xóa `consensus_locks` của `target_height` đã hoàn tất.
+     - Cập nhật `committed_height = target_height`.
+  4. Node phát sự kiện đã chốt và sẵn sàng tăng `target_height` cho vòng tiếp theo.
 
 ---
 
@@ -206,7 +210,7 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 
 ---
 
-## 7. Chính sách Timeout, Retry và Buffer (Timeout, Retry & Early Buffering)
+## 7. Chính sách Timeout, Retry và Phục hồi Liveness (Timeout, Retry & Liveness Recovery)
 
 ### 7.1 Ba bộ đếm thời gian (Timers)
 
@@ -215,6 +219,7 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 | `PROPOSAL_TIMEOUT` | 5.0 giây | Chờ Leader gửi `PROPOSE` khi bắt đầu `target_height` | Cảnh báo `LEADER_UNAVAILABLE`. Gửi yêu cầu kéo proposal từ Leader. Chờ tiếp |
 | `PREPARE_TIMEOUT` | 2.0 giây | Đã gửi PREPARE nhưng chưa gom đủ 3 phiếu PREPARE | Kích hoạt Retry: Broadcast lại chính phiếu `PREPARE` cũ |
 | `COMMIT_TIMEOUT` | 2.0 giây | Đã gửi COMMIT nhưng chưa gom đủ 3 phiếu COMMIT | Kích hoạt Retry: Broadcast lại chính phiếu `COMMIT` cũ |
+| `STALLED_PROBE_TIMER` | 10.0 giây (± 2s jitter) | Kích hoạt khi node rơi vào `STALLED` | Phát lại chậm (Slow Probe) phiếu đã lưu hoặc thăm dò trạng thái peer |
 
 ### 7.2 Lấy lại Proposal và Xử lý Phiếu Đến Sớm (Early Vote Buffering - Tiêu chí T15)
 1. **Lấy lại Proposal bị mất:**
@@ -226,44 +231,51 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
    - Node duy trì một bộ đệm có giới hạn (`early_votes_buffer`, tối đa 50 phần tử để chống tràn bộ nhớ theo tiêu chí T30).
    - Khi khối proposal tương ứng được tiếp nhận và thẩm định thành công, node tự động xả (*flush*) các phiếu trong buffer ra để kiểm tra Quorum.
 
-### 7.3 Quy tắc Bất biến khi Retry (Retry Invariant)
-1. **Chỉ phát lại bản ghi cũ (Retransmission Only):**
-   Validator chỉ đọc lại bản ghi vote đã lưu trong SQLite và phát lại nguyên vẹn thông điệp cũ. Tuyệt đối không sinh lại chữ ký mới, không thay đổi trường dữ liệu.
-2. **Tính lũy đẳng (Idempotency):**
-   Phía node nhận: Nếu nhận nhiều thông điệp trùng lặp từ một `sender_id`, node chỉ lưu 1 phiếu duy nhất vào `VoteSet`. Bộ đếm Quorum tuyệt đối không được tăng lặp.
+### 7.3 Giải quyết Bế tắc Liveness khi Mạng 2–2 Phục hồi (Tiêu chí E4 & Phục hồi STALLED)
+- **Kịch bản Deadlock tiềm tàng:** Bốn node đều nhận cùng proposal, mạng bị chia cắt 2–2 đủ lâu khiến cả 4 node cạn kiệt 5 lượt retry nhanh và cùng rơi vào `STALLED`. Nếu các node hoàn toàn im lặng, khi mạng nối lại sẽ không có ai phát tin để kích hoạt tiếp.
+- **Cơ chế Slow Probe (Thăm dò tần suất thấp):**
+  - Khi ở trạng thái `STALLED`, node **dừng retry dồn dập (fast retry 2s)** để tránh nghẽn mạng, nhưng **chuyển sang chế độ Thăm dò Chậm (Slow Probe)**:
+    - Định kỳ mỗi $10 \pm 2$ giây (có jitter ngẫu nhiên để tránh xung đột đồng thời), node phát lại phiếu bầu đã lưu của mình (`PREPARE` hoặc `COMMIT` tùy pha bị kẹt).
+    - Hoặc node gửi request thăm dò trạng thái `GET /consensus/status?height=target_height` tới các peer.
+  - Khi phân vùng mạng 2–2 được hàn gắn, cơ chế Slow Probe bảo đảm các node trao đổi được các phiếu còn thiếu, phá vỡ thế bế tắc và đưa hệ thống tiến triển tiếp.
+  - Toàn bộ quá trình phục hồi **tuyệt đối giữ nguyên lock đã lưu và ngưỡng Quorum $q=3$**.
 
-### 7.4 "Bốn KHÔNG" của Timeout (Safety Anti-patterns)
-Khi xảy ra timeout, hệ thống tuyệt đối cấm các hành vi sau:
-1. **KHÔNG HẠ QUORUM:** Không bao giờ hạ ngưỡng từ 3 xuống 2.
-2. **KHÔNG TỰ Ý CHỐT BLOCK:** Không chốt khi chưa đủ 3 chữ ký COMMIT hợp lệ.
-3. **KHÔNG XÓA DURABLE LOCK:** Không xóa khóa để đổi sang ký block khác ở cùng height.
-4. **KHÔNG TỰ Ý ĐỔI LEADER:** Bản lõi không tự chuyển quyền Proposer sang node khác.
-
-### 7.5 Đường Phục hồi Khỏi STALLED (Stalled Recovery Path)
-Nếu sau $K = 5$ lần Retry liên tiếp mà vẫn không đạt đủ Quorum:
-- Node chuyển sang trạng thái **`STALLED`**.
-- Tại trạng thái `STALLED`, node **dừng phát retry chủ động** (tránh nghẽn mạng), nhưng **vẫn duy trì chế độ lắng nghe thụ động (Passive Listener)**:
-  - Nếu mạng phục hồi và các phiếu còn thiếu được gửi tới đạt đủ Quorum $\ge 3$ cho khối đã khóa $\Rightarrow$ Node tiếp tục tiến trình chuyển sang pha tiếp theo hoặc chốt khối.
-  - Nếu một peer khác đã chốt khối và gửi `CommitCertificate` hợp lệ $\Rightarrow$ Node xác thực certificate và chốt khối, thoát khỏi `STALLED`.
-  - Nếu mạng phân vùng phục hồi và phát hiện `peer_committed_height > local_committed_height` $\Rightarrow$ Node chuyển sang trạng thái `SYNCING`.
-  - Toàn bộ quá trình phục hồi phải giữ nguyên vẹn `locked_block_hash` và điều kiện Quorum $q=3$.
+### 7.4 Đường Chuyển Trạng thái khi Thoát khỏi STALLED
+Quy trình phục hồi từ `STALLED` phải tuân thủ tuần tự theo đúng pha đồng thuận:
+1. **Nếu đang kẹt ở pha PREPARE:**
+   - Khi nhận đủ $\ge 3$ phiếu `PREPARE` hợp lệ $\Rightarrow$ Node chuyển sang **`PREPARED`**.
+   - Tại `PREPARED`, node bắt buộc thực hiện: Ký own `COMMIT`, lưu vào SQLite, phát `COMMIT` ra mạng $\Rightarrow$ Node chuyển sang **`COMMITTING`**. *(Tuyệt đối không nhảy cóc từ STALLED sang thẳng COMMITTING mà bỏ qua bước lưu/phát COMMIT)*.
+2. **Nếu đang kẹt ở pha COMMIT:**
+   - Khi nhận đủ $\ge 3$ phiếu `COMMIT` hợp lệ (hoặc nhận được `CommitCertificate` hợp lệ từ peer) $\Rightarrow$ Node chuyển sang **`DECIDED`** và thực hiện commit nguyên tử vào SQLite.
+3. **Nếu phát hiện peer đã đi trước:**
+   - Nếu `peer_committed_height > local_committed_height` $\Rightarrow$ Node chuyển sang **`SYNCING`**.
 
 ---
 
-## 8. Cơ chế Bắt Equivocation Độc lập với Thứ tự Nhận Phiếu (Tiêu chí T17)
+## 8. Cơ chế Bắt và Lưu Trữ Bằng Chứng Equivocation (Tiêu chí T17)
 
-Để ngăn chặn validator Byzantine lách luật bằng cách đảo thứ tự gửi phiếu:
-- Hệ thống duy trì một bảng chứng cứ phiếu đã quan sát:
+Để ngăn chặn validator Byzantine lách luật bằng cách đảo thứ tự gửi phiếu và cung cấp đầy đủ bằng chứng cho TV3 lưu trữ:
+
+### 8.1 Thuật toán Kiểm tra Độc lập Thứ tự
+- Hệ thống duy trì bảng chứng cứ phiếu đã quan sát:
   $$\text{seen\_votes}[\langle \text{target\_height}, \text{phase} \rangle][\text{sender\_id}] = \text{vote}$$
-- Khi một phiếu $V$ gửi từ `sender_id` tới:
-  1. Nếu `sender_id` chưa có trong `seen_votes`: Lưu `seen_votes[sender_id] = V`.
-  2. Nếu `sender_id` đã có trong `seen_votes`:
-     - Nếu $V.\text{block\_hash} == \text{seen\_votes}[sender\_id].\text{block\_hash}$: Phiếu gửi lại trùng lặp (Idempotent), bỏ qua.
-     - Nếu $V.\text{block\_hash} \ne \text{seen\_votes}[sender\_id].\text{block\_hash}$: **PHÁT HIỆN EQUIVOCATION!**
-       - Node lưu trữ cả hai phiếu $V_1, V_2$ làm bằng chứng Byzantine không thể chối cãi.
-       - Ghi log cảnh báo vi phạm an toàn nghiêm trọng.
-       - Phiếu vi phạm không được thêm vào tập tính Quorum.
-- **Tính độc lập thứ tự:** Bất kể validator gửi phiếu ủng hộ Block $A$ trước rồi Block $B$ sau, hay gửi $B$ trước $A$ sau, hệ thống đều phát hiện ra sự mâu thuẫn ngay khi nhận được phiếu thứ hai.
+- Bảng bằng chứng gian lận:
+  $$\text{equivocation\_evidence}[\text{sender\_id}] = \langle \text{vote}_1, \text{vote}_2 \rangle$$
+
+### 8.2 Quy trình Xử lý khi nhận Phiếu $V$ từ `sender_id`:
+1. **Nếu `sender_id` chưa có trong `seen_votes`:**
+   - Lưu `seen_votes[sender_id] = V`.
+   - Nếu $V.\text{block\_hash} == \text{expected\_block\_hash}$, đưa $V$ vào `quorum_votes`.
+2. **Nếu `sender_id` đã có trong `seen_votes` ($V_{\text{old}} = \text{seen\_votes}[sender\_id]$):**
+   - **Trường hợp A (Trùng lặp hợp lệ - Idempotency):**
+     Nếu $V.\text{block\_hash} == V_{\text{old}}.\text{block\_hash}$ và $V.\text{signature} == V_{\text{old}}.\text{signature}$ $\rightarrow$ Bỏ qua (không tăng đếm Quorum).
+   - **Trường hợp B (Gian lận Byzantine - Equivocation):**
+     Nếu $V.\text{block\_hash} \ne V_{\text{old}}.\text{block\_hash}$:
+     - **Lưu toàn bộ cặp phiếu làm bằng chứng:** Ghi nhận `equivocation_evidence[sender_id] = (V_{\text{old}}, V)`.
+     - **Gọi Storage Interface (TV3):** Chuyển giao cặp bằng chứng xuống bảng SQLite `consensus_equivocations(height, phase, sender_id, vote_a_json, vote_b_json, detected_at)`.
+     - **Xử lý Quorum:** Loại bỏ hoàn toàn `sender_id` khỏi `quorum_votes` (nếu trước đó đã thêm vào).
+     - Ghi log cảnh báo mức CRITICAL: *Phát hiện Byzantine Equivocation từ validator `sender_id`*.
+- **Tính độc lập thứ tự:** Dù validator gửi $A$ trước $B$ sau, hay $B$ trước $A$ sau, hệ thống đều bắt được hành vi double-signing ngay khi phiếu thứ hai tới và lưu trữ đủ cả 2 chữ ký đối lập làm bằng chứng.
 
 ---
 
@@ -276,9 +288,9 @@ Nếu sau $K = 5$ lần Retry liên tiếp mà vẫn không đạt đủ Quorum:
 | **1 Follower gửi phiếu sai Context** | T14 | Trộn height/chain/phase hoặc view != 0 | Bị loại bỏ ngay trước khi tính Quorum | ĐẠT | ĐẠT |
 | **Phiếu tới trễ / đảo thứ tự** | T15 | Phiếu đến trước proposal hoặc COMMIT trước PREPARE | Lưu vào early buffer, kéo proposal thiếu | ĐẠT | ĐẠT |
 | **Leader Equivocation** | T16 | Leader gửi 2 block cạnh tranh | Chia phiếu (Split-vote), không block nào đủ 3 phiếu $\Rightarrow$ Dừng an toàn (`STALLED`) | ĐẠT | KHÔNG |
-| **Byzantine Double-Signing** | T17 | Follower gửi 2 phiếu khác hash (thứ tự A→B hoặc B→A) | Phát hiện Equivocation độc lập thứ tự, lưu chứng cứ | ĐẠT | ĐẠT |
+| **Byzantine Double-Signing** | T17 | Follower gửi 2 phiếu khác hash (thứ tự A→B hoặc B→A) | Phát hiện Equivocation độc lập thứ tự, lưu đủ 2 phiếu làm chứng cứ | ĐẠT | ĐẠT |
 | **Restart khi đang bỏ phiếu** | T22, T29 | Sập nguồn sau khi gửi hoặc 2 request đồng thời | Khôi phục Lock và Own Vote từ SQLite, không ký giá trị khác | ĐẠT | ĐẠT |
-| **Phân vùng mạng 2 - 2** | E4 | Nhóm 1 {node1, node2}, Nhóm 2 {node3, node4} | Cả 2 nhóm đều tối đa 2 phiếu ($< 3$) $\Rightarrow$ Dừng an toàn | ĐẠT | KHÔNG |
+| **Phân vùng mạng 2 - 2 rồi nối lại** | E4 | 4 node vào STALLED, sau đó mạng phục hồi | Cơ chế Slow Probe phá deadlock, gom đủ 3 phiếu chốt block | ĐẠT | ĐẠT |
 | **Phân vùng mạng 3 - 1** | E4 | Nhóm 3 node chứa Leader; 1 follower bị cô lập | Nhóm 3 node đạt Quorum $3/4$ và tiếp tục; node cô lập sync sau | ĐẠT | ĐẠT |
 
 ---
@@ -294,9 +306,11 @@ Nếu sau $K = 5$ lần Retry liên tiếp mà vẫn không đạt đủ Quorum:
 - TV3 cài đặt bảng SQLite:
   - `consensus_votes(height, phase, block_hash, signature, created_at)`
   - `consensus_locks(height, locked_block_hash)`
+  - `consensus_equivocations(height, phase, sender_id, vote_a_json, vote_b_json, detected_at)`
 - TV3 đảm bảo quy tắc `Persist-Before-Send`: ghi khóa và phiếu bầu vào SQLite trong cùng transaction trước khi gọi hàm broadcast của HTTP transport.
 - Cài đặt endpoint `GET /consensus/proposal?height={height}` để phục vụ lấy lại proposal bị thiếu.
+- Cài đặt endpoint `GET /consensus/status?height={height}` phục vụ cơ chế Slow Probe khi ở trạng thái `STALLED`.
 
 ### Phối hợp với TV4 (Frontend & Monitoring):
 - TV2 cung cấp trạng thái hiện tại qua API: `committed_height`, `target_height`, `current_phase`, `votes_received`, `is_locked`, `is_stalled`.
-- TV4 dùng dữ liệu này để hiển thị Timeline bỏ phiếu trực quan theo thời gian thực.
+- TV4 dùng dữ liệu này để hiển thị Timeline bỏ phiếu trực quan theo thời gian thực và cảnh báo vi phạm Equivocation nếu có.
