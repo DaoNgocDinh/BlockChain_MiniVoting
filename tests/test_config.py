@@ -1,21 +1,39 @@
-"""Tests for cluster topology, configuration loading, and node isolation."""
+"""Tests for cluster topology, per-node isolation, and runtime timeout config."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from src.network.config import NodeConfig, load_cluster_config
+from src.network.config import (
+    DEFAULT_COMMIT_TIMEOUT_S,
+    DEFAULT_PEER_REQUEST_TIMEOUT_S,
+    DEFAULT_PREPARE_TIMEOUT_S,
+    DEFAULT_PROPOSAL_TIMEOUT_S,
+    DEFAULT_STALLED_PROBE_INTERVAL_S,
+    DEFAULT_STALLED_PROBE_JITTER_S,
+    NodeConfig,
+    RuntimeTimeouts,
+    load_cluster_config,
+    load_runtime_timeouts,
+)
 
 
 def test_load_cluster_config_success():
-    config = load_cluster_config()
+    config = load_cluster_config(environ={})
     assert config.chain_id == "minivoting-dev"
     assert config.leader_id == "node1"
     assert config.quorum == 3
     assert len(config.nodes) == 4
+    assert config.runtime == RuntimeTimeouts(
+        peer_request_timeout_s=DEFAULT_PEER_REQUEST_TIMEOUT_S,
+        proposal_timeout_s=DEFAULT_PROPOSAL_TIMEOUT_S,
+        prepare_timeout_s=DEFAULT_PREPARE_TIMEOUT_S,
+        commit_timeout_s=DEFAULT_COMMIT_TIMEOUT_S,
+        stalled_probe_interval_s=DEFAULT_STALLED_PROBE_INTERVAL_S,
+        stalled_probe_jitter_s=DEFAULT_STALLED_PROBE_JITTER_S,
+    )
 
-    # Verify all 4 nodes are properly loaded
     for nid in ["node1", "node2", "node3", "node4"]:
         assert nid in config.nodes
         node = config.get_node(nid)
@@ -23,10 +41,11 @@ def test_load_cluster_config_success():
         assert node.id == nid
         assert node.host == "127.0.0.1"
         assert node.port in {8001, 8002, 8003, 8004}
+        assert node.db_path.name == "ledger.sqlite"
 
 
 def test_all_nodes_have_strictly_isolated_directories_and_keys():
-    config = load_cluster_config()
+    config = load_cluster_config(environ={})
     ports = set()
     data_dirs = set()
     key_paths = set()
@@ -50,7 +69,7 @@ def test_all_nodes_have_strictly_isolated_directories_and_keys():
 
 
 def test_peer_discovery_returns_the_other_three_validators():
-    config = load_cluster_config()
+    config = load_cluster_config(environ={})
 
     for nid in ["node1", "node2", "node3", "node4"]:
         peers = config.get_peers(nid)
@@ -61,7 +80,7 @@ def test_peer_discovery_returns_the_other_three_validators():
 
 
 def test_leader_identification():
-    config = load_cluster_config()
+    config = load_cluster_config(environ={})
     assert config.is_leader("node1") is True
     assert config.is_leader("node2") is False
     assert config.is_leader("node3") is False
@@ -69,7 +88,7 @@ def test_leader_identification():
 
 
 def test_unknown_node_query_raises_value_error():
-    config = load_cluster_config()
+    config = load_cluster_config(environ={})
     with pytest.raises(ValueError, match="Unknown node ID 'node99'"):
         config.get_node("node99")
     with pytest.raises(ValueError, match="Unknown node ID 'node99'"):
@@ -116,7 +135,7 @@ def test_config_validation_rejects_duplicate_ports(tmp_path: Path):
     cfg_file.write_text(json.dumps(invalid_data), encoding="utf-8")
 
     with pytest.raises(ValueError, match="Port conflict"):
-        load_cluster_config(cfg_file)
+        load_cluster_config(cfg_file, environ={})
 
 
 def test_config_validation_rejects_non_4_nodes(tmp_path: Path):
@@ -152,4 +171,42 @@ def test_config_validation_rejects_non_4_nodes(tmp_path: Path):
     cfg_file.write_text(json.dumps(invalid_data), encoding="utf-8")
 
     with pytest.raises(ValueError, match="requires exactly 4 nodes"):
-        load_cluster_config(cfg_file)
+        load_cluster_config(cfg_file, environ={})
+
+
+def test_runtime_timeouts_priority_env_over_config_over_default():
+    cfg_runtime = {
+        "peer_request_timeout_s": 1.5,
+        "proposal_timeout_s": 6.0,
+        "stalled_probe_jitter_s": 0.0,
+    }
+    env = {
+        "MINIVOTING_PEER_REQUEST_TIMEOUT_S": "2.5",
+        "MINIVOTING_COMMIT_TIMEOUT_S": "3.5",
+    }
+    resolved = load_runtime_timeouts(cfg_runtime, environ=env)
+    assert resolved.peer_request_timeout_s == 2.5  # env beats config
+    assert resolved.proposal_timeout_s == 6.0  # config beats default
+    assert resolved.prepare_timeout_s == DEFAULT_PREPARE_TIMEOUT_S  # default
+    assert resolved.commit_timeout_s == 3.5  # env beats default
+    assert resolved.stalled_probe_interval_s == DEFAULT_STALLED_PROBE_INTERVAL_S
+    assert resolved.stalled_probe_jitter_s == 0.0  # jitter 0 is allowed
+
+
+@pytest.mark.parametrize(
+    "cfg_runtime,env,match",
+    [
+        ({"peer_request_timeout_s": 0}, {}, "> 0"),
+        ({"proposal_timeout_s": -1}, {}, "> 0"),
+        ({"prepare_timeout_s": True}, {}, "boolean"),
+        ({"stalled_probe_interval_s": 5.0, "stalled_probe_jitter_s": 5.0}, {}, "strictly less"),
+        ({"stalled_probe_jitter_s": -0.1}, {}, ">= 0"),
+        ({"unknown_key": 1.0}, {}, "Unknown key"),
+        ({}, {"MINIVOTING_PEER_REQUEST_TIMEOUT_S": "nan"}, "> 0 and finite"),
+        ({}, {"MINIVOTING_PEER_REQUEST_TIMEOUT_S": "inf"}, "> 0 and finite"),
+        ({}, {"MINIVOTING_COMMIT_TIMEOUT_S": "abc"}, "Invalid number"),
+    ],
+)
+def test_runtime_timeouts_rejects_invalid_values(cfg_runtime, env, match):
+    with pytest.raises(ValueError, match=match):
+        load_runtime_timeouts(cfg_runtime, environ=env)

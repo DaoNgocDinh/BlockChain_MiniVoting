@@ -71,9 +71,9 @@ Bàn giao: src/api, config, scripts, docs/api-contract.md. Phụ thuộc: TV1-W1
 
 Tiêu chí nghiệm thu:
 
-- [x] Bốn /health trả đúng node ID; health không có nghĩa đủ quorum/đã sync.
-- [x] Cài từ dependency lock trên máy khác; schema được chủ module review.
-- [x] Bốn node không dùng chung DB/private key; script không kill process ngoài repo.
+- [ ] Bốn /health trả đúng node ID; health không có nghĩa đủ quorum/đã sync.
+- [ ] Cài từ dependency lock trên máy khác; schema được chủ module review.
+- [ ] Bốn node không dùng chung DB/private key; script không kill process ngoài repo.
 
 ## TV4-W1 · [TV4][W1] Wireframe, test matrix và khung báo cáo
 
