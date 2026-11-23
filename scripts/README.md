@@ -1,10 +1,40 @@
-# Script dùng chung
+# Bộ script vận hành và phát triển MiniVoting
 
-`run-node.ps1 -NodeId node1` chạy một API scaffold ở foreground; Ctrl+C dừng đúng tiến trình.
-Để thử bốn node, mở bốn terminal và lần lượt chọn node1–node4.
+Thư mục này chứa các script PowerShell và Python phục vụ khởi chạy, dừng an toàn, kiểm tra trạng thái và thiết lập môi trường cho 4 validator nodes.
 
-TV3 bổ sung bộ chạy/dừng bốn tiến trình có kiểm tra PID và ownership, không kill theo tên
-`python` chung. TV1/TV3 bổ sung sinh key/genesis. TV4/TV3 bổ sung workload và fault runner.
+## Danh sách scripts
 
-Các script sắp tới phải ghi rõ config, seed, commit SHA và nơi xuất log; không xóa DB/keys
-âm thầm. Không tái sử dụng biến hệ thống như `$HOME` làm biến nội bộ.
+| Script | Ngôn ngữ | Chức năng | Lưu ý an toàn |
+|---|---|---|---|
+| `scripts/run-node.ps1` | PowerShell | Khởi chạy 1 node ở foreground (`-NodeId node1..node4`) | Phù hợp debug đơn lẻ; Ctrl+C để dừng |
+| `scripts/start-all-nodes.ps1` | PowerShell | Khởi chạy cùng lúc 4 node ở background, lưu PID vào `.run/nodes.json`, thăm dò `/health` | Chờ 4 node phản hồi 200 OK |
+| `scripts/stop-all-nodes.ps1` | PowerShell | Dừng an toàn 4 tiến trình node theo PID | **Kiểm tra quyền sở hữu và CommandLine**, kiên quyết không kill tiến trình ngoài repo |
+| `scripts/status-nodes.ps1` | PowerShell | Báo cáo trạng thái sống/chết (PID) và kết quả `/health` của 4 node | Dùng theo dõi cụm node nhanh |
+| `scripts/generate-dev-keys.py` | Python | Khởi tạo 4 thư mục dữ liệu độc lập và placeholder khóa | Thư mục `data/` và `keys/` được `.gitignore` bảo vệ |
+| `scripts/setup-github.ps1` | PowerShell | Thiết lập labels, milestones và protection rules trên GitHub | Dùng cho nhóm trưởng khi khởi tạo repo |
+
+## Hướng dẫn sử dụng
+
+### 1. Chuẩn bị môi trường và thư mục độc lập
+```powershell
+.\.venv\Scripts\python.exe scripts/generate-dev-keys.py
+```
+
+### 2. Khởi chạy toàn bộ 4 node
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-all-nodes.ps1
+```
+
+### 3. Kiểm tra trạng thái cụm
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/status-nodes.ps1
+```
+
+### 4. Dừng an toàn toàn bộ cụm
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/stop-all-nodes.ps1
+```
+
+## Nguyên tắc thiết kế (Design Guidelines)
+- Không kill tiến trình chung theo tên `python`. Mọi thao tác dừng đều dựa trên PID được lưu tại `.run/nodes.json` kết hợp kiểm tra đường dẫn thực thi.
+- 4 validator sở hữu 4 thư mục cơ sở dữ liệu (`data/node1/` .. `data/node4/`) và khóa riêng biệt (`keys/node1.key` .. `keys/node4.key`), tuyệt đối không chia sẻ bộ nhớ hoặc database.

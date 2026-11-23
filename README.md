@@ -18,22 +18,41 @@ genesis, chữ ký, SQLite, đồng bộ và benchmark chưa được cài đặ
 
 ## Cài và chạy backend trên Windows
 
-Yêu cầu Python 3.13 (phiên bản mục tiêu của CI), Git và PowerShell. Python 3.14
-được chấp nhận trong metadata, nhưng cả nhóm nên thống nhất 3.13 trước khi thêm
-thư viện. Các lệnh dưới đây chạy tại thư mục gốc repository:
+Yêu cầu Python 3.12+ (hỗ trợ 3.12–3.14, mục tiêu CI 3.13), Git và PowerShell.
+Các lệnh dưới đây chạy tại thư mục gốc repository:
 
 ```powershell
 git clone https://github.com/DaoNgocDinh/BlockChain_MiniVoting.git
 cd BlockChain_MiniVoting
-py -3.13 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-powershell -NoProfile -File scripts/run-node.ps1 -NodeId node1
+py -3.12 -m venv .venv
+# Cài đặt từ lockfile tái lập của nhóm:
+.\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
 ```
 
+### Chạy và quản lý 4 node
+
+Khởi chạy cả 4 validator cùng lúc ở background và kiểm tra `/health`:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-all-nodes.ps1
+```
+
+Kiểm tra trạng thái các node (PID, tiến trình sống/chết và phản hồi HTTP):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/status-nodes.ps1
+```
+
+Dừng an toàn cả 4 tiến trình (chỉ dừng tiến trình thuộc repo, không kill ngoài):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/stop-all-nodes.ps1
+```
+
+Để chạy đơn lẻ 1 node ở foreground phục vụ debug:
+```powershell
+powershell -NoProfile -File scripts/run-node.ps1 -NodeId node1
+```
 Mở http://127.0.0.1:8001/health hoặc http://127.0.0.1:8001/docs.
-Mở thêm ba terminal và đổi `-NodeId` thành node2, node3, node4; cổng tương ứng
-8002, 8003, 8004. Ctrl+C tại từng terminal để dừng. Mỗi terminal chạy cùng một
-bộ source; không sao chép thành bốn phiên bản node.
+Đổi `-NodeId` thành node2, node3, node4 tương ứng các cổng 8002, 8003, 8004. Ctrl+C để dừng.
+Mỗi node chạy cùng một bộ source, sở hữu thư mục database và khóa riêng biệt (`data/nodeX/`, `keys/nodeX.key`).
 
 Trên Linux/macOS, tạo `.venv` bằng `python3.13 -m venv .venv`, cài requirements,
 rồi chạy `NODE_ID=node1 .venv/bin/python -m uvicorn src.api.app:app --host 127.0.0.1 --port 8001`.
