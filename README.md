@@ -12,7 +12,7 @@ cố định; leader lỗi hoặc chia phiếu có thể làm hệ thống dừn
 ## Trạng thái hiện tại
 
 Bộ khung ban đầu có cấu trúc module, API `/health`, cấu hình topology bốn node,
-khung React đọc health thật, kiểm tra CI và backlog cho sáu tuần. Consensus,
+wireframe React sáu màn tách mẫu khỏi health/status thật, kiểm tra CI và backlog cho sáu tuần. Consensus,
 genesis, chữ ký, SQLite, đồng bộ và benchmark chưa được cài đặt. `/status` trả
 503 `CONSENSUS_NOT_READY` để không tạo nhầm dữ liệu sổ cái.
 
@@ -40,16 +40,17 @@ rồi chạy `NODE_ID=node1 .venv/bin/python -m uvicorn src.api.app:app --host 1
 
 ## Chạy frontend
 
-Node.js 22.12+; nhóm nên thống nhất Node.js 24 LTS.
+Node.js 24.21.0 (`frontend/.nvmrc`); frontend dùng Node 24.x và npm lockfile v3.
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
 Mở URL Vite hiển thị. Dev proxy kết nối bốn API local; không cần lưu khóa validator
-trên frontend. Chi tiết và phần lockfile cần chốt tại [frontend/README.md](frontend/README.md).
+trên frontend. Cách review sáu màn W1 tại [frontend/README.md](frontend/README.md)
+và [đặc tả wireframe](docs/ui.md).
 
 ## Kiểm tra trước khi mở pull request
 
@@ -59,12 +60,13 @@ trên frontend. Chi tiết và phần lockfile cần chốt tại [frontend/READ
 .\.venv\Scripts\python.exe -m pytest
 cd frontend
 npm run lint
+npm test
 npm run build
 ```
 
 GitHub Actions chạy cùng các kiểm tra trên push `main` và pull request.
-Dependency trực tiếp được pin; TV3/TV4 chốt lockfile đầy đủ trong tuần 1, cập nhật
-CI sang cài từ lockfile và ghi lại phiên bản thực tế trên máy nhóm.
+Frontend đã có `package-lock.json`; CI dùng `npm ci` với Node từ `.nvmrc`.
+Lockfile backend được TV3 theo dõi ở issue #3 / PR #28.
 
 ## Tài liệu và công việc
 
@@ -74,6 +76,9 @@ CI sang cài từ lockfile và ghi lại phiên bản thực tế trên máy nh�
 - [Quy trình Git và Definition of Done](CONTRIBUTING.md).
 - [API và schema cần thống nhất](docs/api-contract.md).
 - [Backlog theo tuần](docs/backlog.md).
+- [Wireframe và checklist review W1](docs/ui.md).
+- [Ma trận T01–T30](docs/test-matrix.md): chưa chạy ghi Not run.
+- [Khung báo cáo theo thành viên](docs/report/outline.md).
 - [Thiết lập bảo vệ main](docs/github-setup.md).
 - [Issues](https://github.com/DaoNgocDinh/BlockChain_MiniVoting/issues).
 

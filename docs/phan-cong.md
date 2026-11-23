@@ -1,7 +1,8 @@
 # Phân công nhóm 4 người
 
-Theo mục 12–14 của [kế hoạch](ke-hoach.md). Username của TV1–TV3 chưa được cung cấp;
-giữ nhãn vai trò để tránh gán sai người. Chủ repo `@DaoNgocDinh` là TV4 và nhóm trưởng.
+Theo mục 12–14 của [kế hoạch](ke-hoach.md). Username đối chiếu từ issue #26:
+TV1 `@CaoDucDao`, TV2 `@germnguyen`, TV3 `@pvduc05`.
+Chủ repo `@DaoNgocDinh` là TV4 và nhóm trưởng.
 
 | Vai trò | Phụ trách chính | Bàn giao | Review |
 |---|---|---|---|
