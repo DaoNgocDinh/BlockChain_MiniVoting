@@ -290,21 +290,26 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 
 ### 7.3 Giải quyết Bế tắc Liveness khi Mạng 2–2 Phục hồi (Tiêu chí E4 & Phục hồi STALLED)
 - **Kịch bản Deadlock tiềm tàng:** Bốn node đều nhận cùng proposal, mạng bị chia cắt 2–2 đủ lâu khiến cả 4 node cạn kiệt 5 lượt retry nhanh và cùng rơi vào `STALLED`. Nếu các node hoàn toàn im lặng, khi mạng nối lại sẽ không có ai phát tin để kích hoạt tiếp.
-- **Cơ chế Slow Probe (Thăm dò tần suất thấp):**
+- **Cơ chế Slow Probe và Phát lại Kép (Dual-Vote Retransmission - theo `module-interfaces.md §4`):**
   - Khi ở trạng thái `STALLED`, node **dừng retry dồn dập (fast retry 2s)** để tránh nghẽn mạng, nhưng **chuyển sang chế độ Thăm dò Chậm (Slow Probe)**:
-    - Định kỳ mỗi $10 \pm 2$ giây (có jitter ngẫu nhiên để tránh xung đột đồng thời), node phát lại phiếu bầu đã lưu của mình (`PREPARE` hoặc `COMMIT` tùy pha bị kẹt).
+    - Định kỳ mỗi $10 \pm 2$ giây (có jitter ngẫu nhiên để tránh xung đột đồng thời), node phát lại phiếu bầu đã lưu của mình:
+      - **Nếu node đã lưu cả own PREPARE và own COMMIT**: Node bắt buộc phát lại **CẢ HAI PHIẾU**. Lý do: Một peer bị trễ mạng còn kẹt ở pha PREPARE cần phiếu PREPARE của node này để đạt `PreparedCertificate`. Nếu node này chỉ phát lại COMMIT, peer kia sẽ không thể tiến lên.
+      - **Nếu node chỉ mới lưu own PREPARE**: Node phát lại own PREPARE.
     - Hoặc node gửi request thăm dò trạng thái `GET /consensus/status?height=target_height` tới các peer.
   - Khi phân vùng mạng 2–2 được hàn gắn, cơ chế Slow Probe bảo đảm các node trao đổi được các phiếu còn thiếu, phá vỡ thế bế tắc và đưa hệ thống tiến triển tiếp.
   - Toàn bộ quá trình phục hồi **tuyệt đối giữ nguyên lock đã lưu và ngưỡng Quorum $q=3$**.
 
-### 7.4 Đường Chuyển Trạng thái khi Thoát khỏi STALLED
+### 7.4 Đường Chuyển Trạng thái khi Thoát khỏi STALLED và Đường Dẫn Nhanh (Fast-Path)
 Quy trình phục hồi từ `STALLED` phải tuân thủ tuần tự theo đúng pha đồng thuận:
 1. **Nếu đang kẹt ở pha PREPARE:**
    - Khi nhận đủ $\ge 3$ phiếu `PREPARE` hợp lệ $\Rightarrow$ Node chuyển sang **`PREPARED`**.
    - Tại `PREPARED`, node bắt buộc thực hiện: Ký own `COMMIT`, lưu vào SQLite, phát `COMMIT` ra mạng $\Rightarrow$ Node chuyển sang **`COMMITTING`**. *(Tuyệt đối không nhảy cóc từ STALLED sang thẳng COMMITTING mà bỏ qua bước lưu/phát COMMIT)*.
 2. **Nếu đang kẹt ở pha COMMIT:**
    - Khi nhận đủ $\ge 3$ phiếu `COMMIT` hợp lệ (hoặc nhận được `CommitCertificate` hợp lệ từ peer) $\Rightarrow$ Node chuyển sang **`DECIDED`** và thực hiện commit nguyên tử vào SQLite.
-3. **Nếu phát hiện peer đã đi trước:**
+3. **Đường dẫn nhanh qua Finalized Block (`POST /peer/finalized`):**
+   - Nếu node (ở bất kỳ trạng thái `WAIT_PROPOSAL`, `PREPARING`, `COMMITTING`, `STALLED`) nhận được `FinalizedBlock` (gồm `Proposal` + `CommitCertificate` hợp lệ từ $\ge 3$ validator khác) tại `target_height`:
+   - Node xác minh Proposal signature, xác thực từng chữ ký trong CommitCertificate, và tự thực thi lại block trên snapshot. Nếu hợp lệ, node được phép **chuyển thẳng sang `DECIDED` và commit nguyên tử vào SQLite** mà không bắt buộc bản thân phải sở hữu `PreparedCertificate` cục bộ trước đó (rất hữu ích cho follower bị chậm nhịp hoặc vừa phục hồi sau crash).
+4. **Nếu phát hiện peer đã đi trước:**
    - Nếu `peer_committed_height > local_committed_height` $\Rightarrow$ Node chuyển sang **`SYNCING`**.
 
 ---

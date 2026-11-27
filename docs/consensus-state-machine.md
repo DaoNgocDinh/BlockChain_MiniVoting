@@ -62,6 +62,7 @@ Tại một vòng đồng thuận cho `target_height`, CSM của một Validator
 - `EVT_RETRY_EXCEEDED`: Số lần thử lại nhanh vượt quá ngưỡng $K=5$.
 - `EVT_PEER_AHEAD(peer_committed_height)`: Phát hiện peer có `peer_committed_height > local_committed_height`.
 - `EVT_RCV_COMMIT_CERT(cert)`: Nhận được `CommitCertificate` hợp lệ từ peer cho khối đang khóa.
+- `EVT_RCV_FINALIZED_BLOCK(finalized)`: Nhận thông điệp `FinalizedBlock` (Proposal + CommitCertificate) qua `POST /peer/finalized` phục vụ đường dẫn nhanh Fast-path.
 
 ---
 
@@ -87,7 +88,8 @@ Tại một vòng đồng thuận cho `target_height`, CSM của một Validator
 | `COMMITTING` | `EVT_TIMEOUT_COMMIT` | Chưa đủ 3 phiếu, `retry_count >= 5` | Dừng fast retry; Bật `STALLED_PROBE_TIMER` (10s); Chuyển sang cơ chế Slow Probe | `STALLED` |
 | **`STALLED`** | `EVT_PREPARE_QUORUM` | Đang kẹt ở PREPARE, nhận đủ 3 phiếu PREPARE hợp lệ | Gom `PreparedCertificate`; Hủy timer probe; **Chuyển sang `PREPARED`** để ký, lưu và phát COMMIT | **`PREPARED`** |
 | **`STALLED`** | `EVT_COMMIT_QUORUM` hoặc `EVT_RCV_COMMIT_CERT` | Đang kẹt ở COMMIT, nhận đủ 3 COMMIT hoặc nhận Certificate từ peer | Gom/xác thực `CommitCertificate`; Hủy timer probe; **Chuyển sang `DECIDED`** | **`DECIDED`** |
-| **`STALLED`** | `EVT_SLOW_PROBE_TIMER` | Hết 10s thăm dò, mạng chưa tiến triển | Broadcast lại phiếu bầu đã lưu (hoặc gửi request `GET /consensus/status` tới peers); Reset probe timer (Tiêu chí E4 phục hồi 2–2) | `STALLED` |
+| **`STALLED`** | `EVT_SLOW_PROBE_TIMER` | Hết 10s thăm dò, mạng chưa tiến triển | **Phát lại kép (Dual-vote):** Broadcast lại own PREPARE và own COMMIT nếu đã lưu cả hai (để cứu peer kẹt pha trước theo `module-interfaces.md §4`); Hoặc gửi `GET /consensus/status` tới peers; Reset probe timer | `STALLED` |
+| *Trạng thái chưa chốt* (`WAIT_PROPOSAL`, `PREPARING`, `COMMITTING`, `STALLED`) | `EVT_RCV_FINALIZED_BLOCK` | `finalized.height == target_height`, proposal và CommitCertificate hợp lệ | **Fast-path:** Xác thực proposal và chữ ký $\ge 3$ validator trong certificate, thực thi block kiểm tra `state_hash`. Commit SQLite nguyên tử không cần trải qua vote cục bộ | `DECIDED` |
 | `DECIDED` | Hoàn tất commit | Transaction SQLite thành công | 1. Ghi Block + Certificate vào SQLite<br>2. Cập nhật State accounts<br>3. Dọn Mempool<br>4. Xóa Lock của `target_height`<br>5. Cập nhật `committed_height = target_height`<br>6. Đặt `target_height = committed_height + 1`<br>7. Reset VoteSets và buffer | `WAIT_PROPOSAL` |
 | *Bất kỳ trạng thái*| `EVT_PEER_AHEAD` | `peer_committed_height > local_committed_height` | Lưu trạng thái hiện tại, chuyển sang chế độ kéo dữ liệu khối và certificate thiếu | `SYNCING` |
 | `SYNCING` | Hoàn tất đồng bộ | Đã tải và verify đủ chuỗi đến đỉnh mới | Cập nhật `committed_height = tip_height`; `target_height = committed_height + 1`; Trở lại chờ proposal | `WAIT_PROPOSAL` |
@@ -118,7 +120,7 @@ stateDiagram-v2
     
     STALLED --> PREPARED: Nhận đủ 3 PREPARE hợp lệ\n(Thoát STALLED -> Tiến vào PREPARED)
     STALLED --> DECIDED: Nhận đủ 3 COMMIT hoặc CommitCertificate\n(Thoát STALLED -> DECIDED)
-    STALLED --> STALLED: EVT_SLOW_PROBE_TIMER (10s)\n(Phát lại chậm phiếu đã lưu, phá deadlock 2-2)
+    STALLED --> STALLED: EVT_SLOW_PROBE_TIMER (10s)\n(Phát lại kép PREPARE + COMMIT đã lưu)
     
     PREPARED --> COMMITTING: BẮT BUỘC:\n1. Ký own COMMIT\n2. Persist SQLite\n3. Broadcast COMMIT
     
@@ -126,6 +128,11 @@ stateDiagram-v2
     COMMITTING --> COMMITTING: EVT_TIMEOUT_COMMIT & retry < 5 (Retransmit cũ)
     COMMITTING --> STALLED: EVT_TIMEOUT_COMMIT & retry >= 5\n(Chuyển sang Slow Probe 10s)
     COMMITTING --> DECIDED: EVT_COMMIT_QUORUM (Đủ 3 COMMIT hợp lệ)
+    
+    WAIT_PROPOSAL --> DECIDED: EVT_RCV_FINALIZED_BLOCK (Fast-path)
+    PREPARING --> DECIDED: EVT_RCV_FINALIZED_BLOCK (Fast-path)
+    COMMITTING --> DECIDED: EVT_RCV_FINALIZED_BLOCK (Fast-path)
+    STALLED --> DECIDED: EVT_RCV_FINALIZED_BLOCK (Fast-path)
     
     DECIDED --> WAIT_PROPOSAL: Commit SQLite nguyên tử thành công\n(committed_height++, target_height++)
     
@@ -322,11 +329,19 @@ class ConsensusEngine:
         ...
 
     def on_slow_probe_trigger(self) -> None:
-        """Định kỳ phát lại phiếu bầu đã lưu (10s) khi ở STALLED để phá deadlock khi mạng 2-2 hàn gắn."""
+        """Định kỳ phát lại phiếu bầu đã lưu (10s) khi ở STALLED.
+        Nếu đã lưu cả PREPARE và COMMIT, phát lại CẢ HAI phiếu để cứu peer kẹt pha trước."""
         if self.state == ConsensusState.STALLED:
-            stored_vote = self.storage.get_own_vote(self.target_height)
-            if stored_vote:
-                self.network.broadcast_vote(stored_vote)
+            own_prepare = self.storage.get_own_signed_vote(self.target_height, "PREPARE")
+            if own_prepare:
+                self.network.broadcast_vote(own_prepare)
+            own_commit = self.storage.get_own_signed_vote(self.target_height, "COMMIT")
+            if own_commit:
+                self.network.broadcast_vote(own_commit)
+
+    def on_receive_finalized(self, finalized: FinalizedBlock) -> None:
+        """Xử lý đường dẫn nhanh Fast-Path khi nhận FinalizedBlock hợp lệ từ peer."""
+        ...
 
     def advance_height(self) -> None:
         """Chuyển sang target_height tiếp theo sau khi commit thành công."""
