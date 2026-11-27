@@ -359,6 +359,13 @@ Quy trình phục hồi từ `STALLED` phải tuân thủ tuần tự theo đún
 
 ## 10. Tiêu chuẩn Nghiệm thu & Kế hoạch Tích hợp (DoD & Interfaces)
 
+Tài liệu này được đồng bộ và liên kết trực tiếp với các hợp đồng chung của hệ thống:
+- [Mô hình dữ liệu và byte chuẩn v1](wire-models.md): Định nghĩa chi tiết schema JSON, định dạng nhị phân, quy tắc băm và các miền ký Ed25519.
+- [Hợp đồng giao tiếp giữa các module](module-interfaces.md): Quy định ranh giới và giao diện gọi hàm giữa Core, Consensus, Storage, Network.
+- [Hợp đồng HTTP API](api-contract.md): Đặc tả các route client, route peer wire `/peer/*`, các endpoint phục hồi `/consensus/*`, mã lỗi và giới hạn body.
+- [Fixture kiểm chứng chuẩn v1](fixtures/wire-v1.json) và script kiểm tra `node scripts/verify-wire-v1.mjs`: Bộ dữ liệu mẫu công khai dùng để đối chiếu độc lập chữ ký, canonical bytes và state transitions.
+- [Ma trận kiểm thử T01–T30](test-matrix.md): Danh mục các kịch bản kiểm thử mà TV2 trực tiếp phụ trách hoặc phối hợp (T08–T17, T19, T22, T29).
+
 ### Phối hợp với TV1 (Core Module):
 - Thống nhất hàm băm chuẩn hóa: `canonical_bytes()`.
 - Xác nhận các trường trong `Vote` không bị thay đổi thứ tự khi parse JSON.

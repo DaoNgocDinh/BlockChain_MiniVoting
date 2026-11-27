@@ -358,6 +358,11 @@ class ConsensusEngine:
 
 ## 8. Kế hoạch Thẩm định (Review & Verification)
 
+Đặc tả này kết nối trực tiếp với các tài liệu hợp đồng và ma trận kiểm thử của dự án:
+- [Mô hình wire v1](wire-models.md): Đặc tả cấu trúc `Vote`, `Proposal`, `CommitCertificate`, `PreparedCertificate` và các miền ký.
+- [Hợp đồng liên module](module-interfaces.md): Ranh giới giao diện `src/consensus` với `src/core`, `src/storage` và `src/network`.
+- [Ma trận kiểm thử T01–T30](test-matrix.md): Phân công các ca test simulation trọng yếu của TV2 (T10, T12, T13, T14, T15, T17).
+
 - **TV1 thẩm định:** Kiểm tra tính tương thích giữa bước `VALIDATING_PROPOSAL` với hàm `execute_block()` và cách tính `state_hash` trong Core.
 - **TV3 thẩm định:** Xác nhận các điểm `Persist-Before-Send` trong State Machine; cài đặt endpoint kéo proposal thiếu `GET /consensus/proposal`; cài đặt bảng SQLite `consensus_equivocations` lưu cặp bằng chứng `(vote_a, vote_b)`.
 - **TV4 thẩm định:** Thống nhất các trạng thái hiển thị (`PREPARING`, `COMMITTING`, `LEADER_UNAVAILABLE`, `STALLED`, `SYNCING`) để hiển thị màu sắc và badge tương ứng trên UI Dashboard.
