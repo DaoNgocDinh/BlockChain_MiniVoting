@@ -102,9 +102,12 @@ Mọi validator (kể cả Leader `node1`) đều phải tham gia quy trình b�
   2. Thực thi thử tuần tự các giao dịch trên bản sao trạng thái tài khoản để tính `state_hash` và `tx_list_hash`.
   3. Đóng gói Header: `height = target_height`, `prev_hash = tip_hash`, `timestamp_ms`, `proposer_id = 'node1'`, `state_hash`, `tx_list_hash`.
   4. Tính `block_hash = SHA256(canonical_bytes(Header))`.
-  5. Leader ký đề xuất: `proposal_sig = Sign(leader_private_key, block_hash)`.
-  6. **Ghi đĩa trước (Persist-Before-Send):** Leader lưu `proposal` vào SQLite để sẵn sàng phát lại nếu peer yêu cầu.
-  7. Broadcast thông điệp `PROPOSE` kèm toàn bộ dữ liệu khối cho tất cả các node.
+  5. Leader tạo `SignedContext` (7 trường: `protocol_version`, `chain_id`, `height = target_height`, `view = 0`, `phase = 'PROPOSE'`, `block_hash`, `sender_id = 'node1'`).
+  6. Leader ký đề xuất có phân tách miền ký Ed25519 (theo RFC 8032):
+     $$\text{proposal\_signing\_bytes} = \text{ASCII}(\text{"MINIVOTING-V1/PROPOSE"}) \mathbin{\Vert} \text{0x00} \mathbin{\Vert} \text{canonical\_bytes}(\text{SignedContext})$$
+     $$\text{proposal\_sig} = \text{Sign}(\text{leader\_private\_key}, \text{proposal\_signing\_bytes})$$
+  7. **Ghi đĩa trước (Persist-Before-Send):** Leader lưu `proposal` vào SQLite để sẵn sàng phát lại nếu peer yêu cầu.
+  8. Broadcast thông điệp `PROPOSE` (gồm `SignedContext`, `proposal_sig` và `block` đính kèm ở cùng cấp JSON) cho tất cả các node.
 
 ### 4.2 Pha 2: PREPARE (Xác thực và Khóa thứ tự)
 - **Chủ thể:** **Tất cả các Validator (kể cả Leader)**.
@@ -151,7 +154,54 @@ Mọi validator (kể cả Leader `node1`) đều phải tham gia quy trình b�
 
 Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pydantic nghiêm ngặt, được chuẩn hóa (`canonical_bytes`) trước khi băm và ký:
 
-### 5.1 Cấu trúc Thông điệp Bỏ phiếu (Vote Message)
+### 5.1 Cấu trúc Ngữ cảnh Ký (SignedContext)
+`SignedContext` là cấu trúc 7 trường dùng chung cho việc ký đề xuất `PROPOSE` và các phiếu `PREPARE`, `COMMIT`:
+
+```json
+{
+  "protocol_version": 1,
+  "chain_id": "minivoting-testnet-1",
+  "height": 1,
+  "view": 0,
+  "phase": "PREPARE", 
+  "block_hash": "a5c7f8...64_hex_chars...",
+  "sender_id": "node2"
+}
+```
+
+### 5.2 Cấu trúc Thông điệp Đề xuất (Proposal Message)
+`Proposal` mở rộng từ `SignedContext` (với `phase = 'PROPOSE'`), bổ sung chữ ký của leader và khối đính kèm ở cùng cấp JSON:
+
+```json
+{
+  "protocol_version": 1,
+  "chain_id": "minivoting-testnet-1",
+  "height": 1,
+  "view": 0,
+  "phase": "PROPOSE",
+  "block_hash": "a5c7f8...64_hex_chars...",
+  "sender_id": "node1",
+  "signature": "3b8e21...128_hex_chars...",
+  "block": {
+    "header": {
+      "protocol_version": 1,
+      "chain_id": "minivoting-testnet-1",
+      "height": 1,
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "proposer_id": "node1",
+      "timestamp_ms": 1732316400000,
+      "tx_list_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "state_hash": "4a5e1e...64_hex_chars..."
+    },
+    "transactions": [],
+    "block_hash": "a5c7f8...64_hex_chars..."
+  }
+}
+```
+
+*Lưu ý về chữ ký Proposal:* Chữ ký `signature` của Leader chỉ bao phủ `SignedContext` với miền ký `MINIVOTING-V1/PROPOSE`. Dữ liệu khối `block` đính kèm được thẩm định độc lập thông qua việc tính lại `tx_list_hash`, `state_hash` và `block_hash`.
+
+### 5.3 Cấu trúc Thông điệp Bỏ phiếu (Vote Message)
 Áp dụng chung cho cả pha `PREPARE` và `COMMIT`:
 
 ```json
@@ -167,13 +217,14 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
 }
 ```
 
-*Ghi chú (Tiêu chí T14):*
-- Kiểm tra tính hợp lệ của Context: Mọi trường `protocol_version`, `chain_id`, `height`, `view`, `phase` phải khớp tuyệt đối với vòng đồng thuận hiện tại trước khi thẩm định chữ ký và đưa vào tính Quorum.
-- Chữ ký `signature` được tính bằng thuật toán Ed25519 trên byte chuẩn hóa của thông điệp **sau khi đã bỏ qua trường `signature`**:
-  $$\text{signature} = \text{Sign}_{SK}(\text{canonical\_bytes}(\text{Vote} \setminus \{\text{signature}\}))$$
+*Quy tắc ký Ed25519 có phân tách miền (Domain Separation Prefix - RFC 8032):*
+- Chuỗi byte đưa vào hàm ký/xác thực Ed25519 được ghép nối bằng tiền tố domain ASCII và byte `0x00`:
+  $$\text{signing\_bytes} = \text{ASCII}(\text{"MINIVOTING-V1/"} + \text{phase}) \mathbin{\Vert} \text{0x00} \mathbin{\Vert} \text{canonical\_bytes}(\text{SignedContext})$$
+  $$\text{signature} = \text{Sign}_{SK}(\text{signing\_bytes})$$
+- Tiền tố miền tương ứng: `"MINIVOTING-V1/PROPOSE"`, `"MINIVOTING-V1/PREPARE"`, hoặc `"MINIVOTING-V1/COMMIT"`. Quy tắc này ngăn chặn 100% việc tái sử dụng chữ ký giữa các pha hoặc các ngữ cảnh khác nhau (Tiêu chí T14).
 
-### 5.2 Cấu trúc Commit Certificate
-`CommitCertificate` không được tính vào `block_hash` nhằm tránh hiện tượng phụ thuộc vòng (circular dependency):
+### 5.4 Cấu trúc Certificate (PreparedCertificate và CommitCertificate)
+`PreparedCertificate` và `CommitCertificate` có chung cấu trúc, đứng ngoài `Block` để tránh phụ thuộc vòng:
 
 ```json
 {
@@ -189,6 +240,12 @@ Tất cả các thông điệp đồng thuận phải tuân theo cấu trúc Pyd
   }
 }
 ```
+
+*Quy tắc xác minh Certificate:*
+- Với mỗi mục `(sender_id, signature)` trong `signatures`:
+  1. Dựng lại `SignedContext` từ các trường của certificate, gán `sender_id` là khóa trong map, `phase = 'PREPARE'` (đối với PreparedCertificate) hoặc `phase = 'COMMIT'` (đối với CommitCertificate).
+  2. Tính `signing_bytes` theo đúng miền ký tương ứng và xác thực bằng public key của `sender_id` từ Genesis registry.
+  3. Certificate hợp lệ khi và chỉ khi có $\ge 3$ chữ ký hợp lệ từ các validator khác nhau được ủy quyền.
 
 ---
 
